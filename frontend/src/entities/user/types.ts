@@ -3,18 +3,18 @@ export interface User {
   username: string;
   email: string | null;
   status: string;
-  createdAt: string;
+  created_at: string;
 }
 
 export interface Device {
   id: string;
-  userId: string;
-  deviceName: string;
-  deviceType: string;
+  user_id: string;
+  device_name: string;
+  device_type: string;
   platform: string | null;
-  publicKeyFingerprint: string;
-  isActive: boolean;
-  createdAt: string;
-  lastSeenAt: string | null;
-  revokedAt: string | null;
+  public_key_fingerprint: string;
+  is_active: boolean;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
 }

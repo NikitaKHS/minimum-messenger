@@ -47,5 +47,7 @@ class ChatOut(BaseModel):
     created_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    other_username: str | None = None
+    other_user_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}

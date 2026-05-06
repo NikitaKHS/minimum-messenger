@@ -96,18 +96,16 @@ class OutboxWorker:
         payload = event.payload
 
         if event.event_type == "message.new":
-            chat_id = payload.get("chat_id")
-            if chat_id:
-                members = await self._redis.smembers(f"chat_members:{chat_id}")
-                for uid_str in members:
-                    try:
-                        uid = uuid.UUID(uid_str)
-                        await publish_to_user(self._redis, uid, {
-                            "type": "message.new",
-                            "payload": payload,
-                        })
-                    except ValueError:
-                        pass
+            member_ids = payload.get("member_user_ids") or []
+            for uid_str in member_ids:
+                try:
+                    uid = uuid.UUID(uid_str)
+                    await publish_to_user(self._redis, uid, {
+                        "type": "message.new",
+                        "payload": payload,
+                    })
+                except ValueError:
+                    pass
 
         elif event.event_type in ("message.delivered", "message.read"):
             message_id = payload.get("message_id")

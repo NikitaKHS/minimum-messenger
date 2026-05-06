@@ -18,6 +18,7 @@ from app.modules.chats.schemas import (
     GroupChatUpdate,
 )
 from app.modules.devices.models import Device
+from app.modules.users.models import User
 from app.modules.messages.models import ChatKeyVersion, GroupMessageKey
 from app.modules.workers.outbox import OutboxService
 
@@ -99,7 +100,19 @@ class ChatService:
 
     async def list_chats(self, user_id: uuid.UUID) -> list[ChatOut]:
         chats = await self._repo.list_for_user(user_id)
-        return [ChatOut.model_validate(c) for c in chats]
+        result = []
+        for c in chats:
+            out = ChatOut.model_validate(c)
+            if c.type == "direct":
+                members = await self._repo.list_members(c.id)
+                other = next((m for m in members if m.user_id != user_id), None)
+                if other:
+                    u = await self._db.scalar(select(User).where(User.id == other.user_id))
+                    if u:
+                        out.other_username = u.username
+                        out.other_user_id = u.id
+            result.append(out)
+        return result
 
     async def get_chat(self, chat_id: uuid.UUID, user_id: uuid.UUID) -> ChatOut:
         await self._assert_member(chat_id, user_id)

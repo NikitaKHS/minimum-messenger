@@ -44,6 +44,6 @@ class UserService:
             raise NotFoundError("User not found")
         return UserOut.model_validate(user)
 
-    async def search(self, query: str) -> list[UserOut]:
-        users = await self._repo.search(query)
+    async def search(self, current_user_id: uuid.UUID, query: str) -> list[UserOut]:
+        users = await self._repo.search(current_user_id, query)
         return [UserOut.model_validate(u) for u in users]

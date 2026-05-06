@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/shared/store/auth";
+import { ensureAccessToken, refreshAccessToken } from "@/shared/api/auth";
 
 type EventHandler = (payload: unknown) => void;
 
@@ -8,17 +9,31 @@ class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private maxDelay = 30_000;
+  private shouldReconnect = false;
+  private isConnecting = false;
 
   connect(): void {
-    const token = useAuthStore.getState().accessToken;
-    if (!token || this.ws?.readyState === WebSocket.OPEN) return;
+    this.shouldReconnect = true;
+    if (this.isConnecting || this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+    void this.open();
+  }
 
+  private async open(): Promise<void> {
+    this.isConnecting = true;
+    const token = await ensureAccessToken();
+    if (!token) {
+      this.isConnecting = false;
+      return;
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${window.location.host}/ws?token=${token}`;
 
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
+      this.isConnecting = false;
       this.reconnectDelay = 1000;
       this.emit("__connected", null);
     };
@@ -33,9 +48,9 @@ class WebSocketClient {
     };
 
     this.ws.onclose = (event) => {
-      if (event.code !== 4001) {
-        this.scheduleReconnect();
-      }
+      this.ws = null;
+      this.isConnecting = false;
+      void this.handleClose(event.code);
     };
 
     this.ws.onerror = () => {
@@ -44,6 +59,7 @@ class WebSocketClient {
   }
 
   disconnect(): void {
+    this.shouldReconnect = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close(1000);
     this.ws = null;
@@ -67,7 +83,20 @@ class WebSocketClient {
     this.handlers.get(event)?.forEach((h) => h(payload));
   }
 
+  private async handleClose(code: number): Promise<void> {
+    if (!this.shouldReconnect) return;
+
+    if (code === 4001 || !useAuthStore.getState().accessToken) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return;
+    }
+
+    this.scheduleReconnect();
+  }
+
   private scheduleReconnect(): void {
+    if (!this.shouldReconnect) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
       this.connect();

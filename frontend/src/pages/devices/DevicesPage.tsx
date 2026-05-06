@@ -18,11 +18,11 @@ export default function DevicesPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["devices"] }),
   });
 
-  if (isLoading) return <div className="p-8 text-muted-foreground">Loading…</div>;
+  if (isLoading) return <div className="p-8 text-muted-foreground">Загрузка…</div>;
 
   return (
     <div className="max-w-lg mx-auto p-8">
-      <h1 className="text-xl font-semibold mb-6">Devices</h1>
+      <h1 className="text-xl font-semibold mb-6">Устройства</h1>
       <div className="space-y-3">
         {devices.map((device) => (
           <div
@@ -30,22 +30,22 @@ export default function DevicesPage() {
             className="border rounded-lg px-4 py-3 flex items-center justify-between"
           >
             <div>
-              <p className="font-medium text-sm">{device.deviceName}</p>
+              <p className="font-medium text-sm">{device.device_name}</p>
               <p className="text-xs text-muted-foreground">
-                {device.deviceType} · {device.platform ?? "Unknown"} ·{" "}
-                {device.isActive ? "Active" : "Revoked"}
+                {device.device_type} · {device.platform ?? "Unknown"} ·{" "}
+                {device.is_active ? "Активно" : "Отозвано"}
               </p>
               <p className="text-xs text-muted-foreground font-mono mt-1">
-                {device.publicKeyFingerprint.slice(0, 16)}…
+                {device.public_key_fingerprint.slice(0, 16)}…
               </p>
             </div>
-            {device.isActive && (
+            {device.is_active && (
               <button
                 onClick={() => revokeMutation.mutate(device.id)}
                 disabled={revokeMutation.isPending}
                 className="text-destructive text-sm hover:underline disabled:opacity-50"
               >
-                Revoke
+                Отозвать
               </button>
             )}
           </div>

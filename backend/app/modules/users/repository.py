@@ -25,10 +25,14 @@ class UserRepository:
             select(User).where(User.email == email, User.deleted_at.is_(None))
         )
 
-    async def search(self, query: str, limit: int = 20) -> list[User]:
+    async def search(self, current_user_id: uuid.UUID, query: str, limit: int = 20) -> list[User]:
         result = await self._db.scalars(
             select(User)
-            .where(User.username.ilike(f"%{query}%"), User.deleted_at.is_(None))
+            .where(
+                User.username.ilike(f"%{query}%"),
+                User.deleted_at.is_(None),
+                User.id != current_user_id,
+            )
             .limit(limit)
         )
         return list(result)

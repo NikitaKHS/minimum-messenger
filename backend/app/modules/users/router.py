@@ -37,9 +37,9 @@ async def update_me(
 async def search_users(
     q: Annotated[str, Query(min_length=2, max_length=64)],
     service: UserService = Depends(_get_service),
-    _: uuid.UUID = Depends(get_current_user_id),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ) -> list[UserOut]:
-    return await service.search(q)
+    return await service.search(user_id, q)
 
 
 @router.get("/{user_id}", response_model=UserOut)

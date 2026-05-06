@@ -82,6 +82,7 @@ class MessageService:
             )
 
         await self._db.flush()
+        all_members = await self._chat_repo.list_members(payload.chat_id)
         await self._outbox.publish(
             "message.new",
             "message",
@@ -94,6 +95,7 @@ class MessageService:
                 "encrypted_payload": payload.encrypted_payload,
                 "encryption_version": payload.encryption_version,
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "member_user_ids": [str(m.user_id) for m in all_members],
             },
         )
         return MessageOut.model_validate(message)

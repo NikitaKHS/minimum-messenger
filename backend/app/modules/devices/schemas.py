@@ -20,6 +20,7 @@ class DeviceOut(BaseModel):
     device_name: str
     device_type: str
     platform: str | None
+    public_identity_key: str | None = None
     public_key_fingerprint: str
     is_active: bool
     created_at: datetime

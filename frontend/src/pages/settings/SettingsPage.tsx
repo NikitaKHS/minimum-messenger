@@ -25,6 +25,20 @@ export default function SettingsPage() {
           Manage devices
         </button>
         <button
+          onClick={() => navigate("/admin")}
+          className="w-full text-left border rounded px-4 py-3 hover:bg-accent text-sm"
+        >
+          Admin tools
+        </button>
+        <a
+          href="/grafana/"
+          target="_blank"
+          rel="noreferrer"
+          className="block w-full text-left border rounded px-4 py-3 hover:bg-accent text-sm"
+        >
+          Open Grafana
+        </a>
+        <button
           onClick={handleLogout}
           className="w-full text-left border border-destructive text-destructive rounded px-4 py-3 hover:bg-destructive/10 text-sm"
         >

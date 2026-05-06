@@ -2,16 +2,18 @@ export interface Chat {
   id: string;
   type: "direct" | "group" | "system";
   title: string | null;
-  avatarUrl: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
+  avatar_url: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  other_username: string | null;
+  other_user_id?: string | null;
 }
 
 export interface ChatMember {
-  userId: string;
+  user_id: string;
   role: "owner" | "admin" | "member";
-  joinedAt: string;
-  leftAt: string | null;
-  mutedUntil: string | null;
+  joined_at: string;
+  left_at: string | null;
+  muted_until: string | null;
 }
