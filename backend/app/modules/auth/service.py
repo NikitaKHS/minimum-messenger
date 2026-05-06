@@ -13,6 +13,7 @@ from app.core.security import (
     needs_rehash,
     verify_password,
 )
+from app.core.metrics import auth_attempts_total
 from app.modules.audit.service import AuditService
 from app.modules.auth.models import Session
 from app.modules.auth.repository import AuthRepository
@@ -65,6 +66,7 @@ class AuthService:
         await self._db.flush()
 
         tokens = await self._create_session(user.id, device.id, ip, user_agent)
+        auth_attempts_total.labels(event="register_ok").inc()
         await self._audit.log(
             user_id=user.id, device_id=device.id, event_type="user.registered", ip=ip
         )
@@ -75,6 +77,7 @@ class AuthService:
     ) -> TokenResponse:
         user = await self._user_repo.get_by_username(payload.username)
         if not user or not verify_password(payload.password, user.password_hash):
+            auth_attempts_total.labels(event="login_failed").inc()
             await self._audit.log(user_id=None, device_id=None, event_type="auth.login_failed", ip=ip)
             raise UnauthorizedError("Invalid credentials")
 
@@ -103,6 +106,7 @@ class AuthService:
             await self._db.flush()
 
         tokens = await self._create_session(user.id, device.id, ip, user_agent)
+        auth_attempts_total.labels(event="login_ok").inc()
         await self._audit.log(
             user_id=user.id, device_id=device.id, event_type="auth.login", ip=ip
         )

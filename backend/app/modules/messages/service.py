@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.metrics import messages_sent_total
 from app.modules.chats.repository import ChatRepository
 from app.modules.devices.repository import DeviceRepository
 from app.modules.messages.models import GroupMessageKey, Message, MessageRecipient
@@ -49,6 +50,7 @@ class MessageService:
             message_type=payload.message_type,
         )
         await self._repo.create(message)
+        messages_sent_total.labels(chat_type="unknown").inc()
 
         chat_members = await self._chat_repo.list_members(payload.chat_id)
         for cm in chat_members:

@@ -14,6 +14,7 @@ from fastapi import WebSocket
 from redis.asyncio import Redis
 
 from app.core.logging import get_logger
+from app.core.metrics import ws_active_connections
 
 logger = get_logger(__name__)
 
@@ -30,6 +31,7 @@ class ConnectionManager:
         await websocket.accept()
         async with self._lock:
             self._connections[user_id].add(websocket)
+        ws_active_connections.inc()
         logger.info("ws.connected", user_id=str(user_id))
 
     async def disconnect(self, websocket: WebSocket, user_id: uuid.UUID) -> None:
@@ -37,6 +39,7 @@ class ConnectionManager:
             self._connections[user_id].discard(websocket)
             if not self._connections[user_id]:
                 del self._connections[user_id]
+        ws_active_connections.dec()
         logger.info("ws.disconnected", user_id=str(user_id))
 
     async def send_to_user(self, user_id: uuid.UUID, event: dict[str, Any]) -> None:
