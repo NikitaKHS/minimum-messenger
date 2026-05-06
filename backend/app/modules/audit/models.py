@@ -22,6 +22,6 @@ class AuditLog(Base, TimestampMixin):
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     ip: Mapped[str | None] = mapped_column(INET, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    event_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (Index("idx_audit_user_created", "user_id", "created_at"),)

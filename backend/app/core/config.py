@@ -1,6 +1,3 @@
-from typing import List
-
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +17,11 @@ class Settings(BaseSettings):
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",")]
 
     DATABASE_URL: str = "postgresql+asyncpg://minimum:minimum_secret@localhost:5432/minimum"
 
@@ -42,13 +43,6 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = "100/minute"
 
     ADMIN_SECRET_KEY: str = "admin-secret"
-
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: str | list) -> list:
-        if isinstance(v, str):
-            return [o.strip() for o in v.split(",")]
-        return v
 
 
 settings = Settings()
