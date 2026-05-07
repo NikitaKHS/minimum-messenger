@@ -13,12 +13,13 @@ export function showNewMessageNotification(
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if (document.visibilityState === "visible") return;
 
-  const n = new Notification(senderName, {
+  const opts: NotificationOptions & { renotify?: boolean } = {
     body: preview,
     icon: "/icon.png",
     tag: `chat-${chatId}`,
     renotify: true,
-  });
+  };
+  const n = new Notification(senderName, opts);
 
   n.onclick = () => {
     window.focus();
