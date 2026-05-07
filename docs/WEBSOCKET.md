@@ -81,6 +81,7 @@ Sent to refresh presence TTL (60 seconds). No payload needed.
     "chat_type": "direct | group",
     "sender_user_id": "uuid",
     "sender_device_id": "uuid",
+    "sender_username": "alice",
     "encrypted_payload": "base64...",
     "encryption_version": "v1",
     "key_version": 3,
@@ -90,6 +91,11 @@ Sent to refresh presence TTL (60 seconds). No payload needed.
 ```
 
 The client is responsible for decrypting `encrypted_payload` using its locally stored private key.
+
+**Client responsibilities on receiving `message.new`:**
+1. Acknowledge delivery — `POST /messages/{message_id}/delivered`
+2. If the chat is open and the tab is visible — additionally `POST /messages/{message_id}/read`
+3. Otherwise — increment the local unread counter and show a browser notification
 
 ### `message.delivered`
 
@@ -237,3 +243,27 @@ Sent when a contact's device public key changes. The client should warn the user
 ## Reconnection
 
 The frontend client performs exponential backoff reconnection starting at 1 second, capped at 30 seconds. On reconnect, call `GET /api/v1/chats/{id}/messages?before=<last_seen_id>` to sync missed messages.
+
+---
+
+## Client-side UX state
+
+The following state is tracked on the client only (not persisted to the server):
+
+| State | Source | Cleared when |
+|---|---|---|
+| Unread count per chat | `message.new` event | Chat opened |
+| Typing users per chat | `typing.started` / `typing.stopped` | `typing.stopped` or 7 s timeout |
+| Online status per user | `presence.updated` | Next `presence.updated` |
+| Delivery status per message | `message.delivered` / `message.read` | Page reload |
+| Last message preview | `message.new` event | Page reload |
+
+### Typing indicator
+
+The client sends `typing.started` on the first keystroke and `typing.stopped` when the input is cleared or 3 seconds elapse without input. The server fan-outs both events to all other members.
+
+Received `typing.started` events are auto-expired on the client after 7 seconds as a safety net in case `typing.stopped` is lost.
+
+### Browser notifications
+
+A browser notification is shown when `message.new` arrives, the sender is not the current user, and `document.visibilityState !== "visible"`. Notifications are grouped per chat via the `tag` field so rapid messages collapse into one.

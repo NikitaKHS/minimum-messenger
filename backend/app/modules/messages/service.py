@@ -1,9 +1,11 @@
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.modules.users.models import User as UserModel
 from app.core.metrics import messages_sent_total
 from app.modules.chats.repository import ChatRepository
 from app.modules.devices.repository import DeviceRepository
@@ -83,6 +85,9 @@ class MessageService:
 
         await self._db.flush()
         all_members = await self._chat_repo.list_members(payload.chat_id)
+        sender_username = await self._db.scalar(
+            select(UserModel.username).where(UserModel.id == sender_user_id)
+        )
         await self._outbox.publish(
             "message.new",
             "message",
@@ -92,13 +97,16 @@ class MessageService:
                 "chat_id": str(message.chat_id),
                 "sender_user_id": str(sender_user_id),
                 "sender_device_id": str(sender_device_id),
+                "sender_username": sender_username,
                 "encrypted_payload": payload.encrypted_payload,
                 "encryption_version": payload.encryption_version,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "member_user_ids": [str(m.user_id) for m in all_members],
             },
         )
-        return MessageOut.model_validate(message)
+        return MessageOut.model_validate(message).model_copy(
+            update={"sender_username": sender_username}
+        )
 
     async def get_history(
         self,
@@ -115,8 +123,22 @@ class MessageService:
         has_more = len(messages) > limit
         items = messages[:limit]
 
+        sender_ids = list({m.sender_user_id for m in items})
+        if sender_ids:
+            rows = await self._db.execute(
+                select(UserModel.id, UserModel.username).where(UserModel.id.in_(sender_ids))
+            )
+            usernames: dict[uuid.UUID, str] = {row.id: row.username for row in rows}
+        else:
+            usernames = {}
+
         return MessageCursorPage(
-            items=[MessageOut.model_validate(m) for m in items],
+            items=[
+                MessageOut.model_validate(m).model_copy(
+                    update={"sender_username": usernames.get(m.sender_user_id)}
+                )
+                for m in items
+            ],
             next_cursor=str(items[-1].id) if has_more and items else None,
             has_more=has_more,
         )

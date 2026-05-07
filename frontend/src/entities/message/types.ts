@@ -10,7 +10,7 @@ export interface Message {
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
-  // Decrypted on the client — never stored on backend
+  sender_username?: string | null;
   decrypted_text?: string;
 }
 
