@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.modules.attachments.models import Attachment
 from app.modules.users.models import User as UserModel
 from app.core.metrics import messages_sent_total
 from app.modules.chats.repository import ChatRepository
@@ -83,6 +84,16 @@ class MessageService:
                 )
             )
 
+        if payload.attachment_id:
+            attachment = await self._db.scalar(
+                select(Attachment).where(
+                    Attachment.id == payload.attachment_id,
+                    Attachment.upload_status == "completed",
+                )
+            )
+            if attachment:
+                attachment.message_id = message.id
+
         await self._db.flush()
         all_members = await self._chat_repo.list_members(payload.chat_id)
         sender_username = await self._db.scalar(
@@ -100,12 +111,13 @@ class MessageService:
                 "sender_username": sender_username,
                 "encrypted_payload": payload.encrypted_payload,
                 "encryption_version": payload.encryption_version,
+                "attachment_id": str(payload.attachment_id) if payload.attachment_id else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "member_user_ids": [str(m.user_id) for m in all_members],
             },
         )
         return MessageOut.model_validate(message).model_copy(
-            update={"sender_username": sender_username}
+            update={"sender_username": sender_username, "attachment_id": payload.attachment_id}
         )
 
     async def get_history(
@@ -132,10 +144,25 @@ class MessageService:
         else:
             usernames = {}
 
+        msg_ids = [m.id for m in items]
+        if msg_ids:
+            att_rows = await self._db.execute(
+                select(Attachment.message_id, Attachment.id).where(
+                    Attachment.message_id.in_(msg_ids),
+                    Attachment.upload_status == "completed",
+                )
+            )
+            attachment_map: dict[uuid.UUID, uuid.UUID] = {row.message_id: row.id for row in att_rows}
+        else:
+            attachment_map = {}
+
         return MessageCursorPage(
             items=[
                 MessageOut.model_validate(m).model_copy(
-                    update={"sender_username": usernames.get(m.sender_user_id)}
+                    update={
+                        "sender_username": usernames.get(m.sender_user_id),
+                        "attachment_id": attachment_map.get(m.id),
+                    }
                 )
                 for m in items
             ],

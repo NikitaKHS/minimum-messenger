@@ -11,6 +11,7 @@ export interface Message {
   edited_at: string | null;
   deleted_at: string | null;
   sender_username?: string | null;
+  attachment_id?: string | null;
   decrypted_text?: string;
 }
 

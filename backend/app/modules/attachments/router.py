@@ -1,6 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -8,6 +9,7 @@ from app.modules.attachments.schemas import (
     AttachmentCompleteRequest,
     AttachmentInitRequest,
     AttachmentInitResponse,
+    AttachmentOut,
     DownloadUrlResponse,
 )
 from app.modules.attachments.service import AttachmentService
@@ -36,6 +38,29 @@ async def complete_upload(
     _: uuid.UUID = Depends(get_current_user_id),
 ) -> None:
     await service.complete_upload(payload)
+
+
+@router.post("/upload", response_model=AttachmentOut, status_code=201)
+async def upload_file(
+    file: UploadFile = File(...),
+    service: AttachmentService = Depends(_get_service),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+) -> AttachmentOut:
+    return await service.upload_file(user_id, file)
+
+
+@router.get("/{attachment_id}/download")
+async def download_attachment(
+    attachment_id: uuid.UUID,
+    service: AttachmentService = Depends(_get_service),
+    _: uuid.UUID = Depends(get_current_user_id),
+) -> Response:
+    content, mime_type = await service.download_bytes(attachment_id)
+    return Response(
+        content=content,
+        media_type=mime_type or "application/octet-stream",
+        headers={"Content-Disposition": "attachment"},
+    )
 
 
 @router.get("/{attachment_id}/download-url", response_model=DownloadUrlResponse)

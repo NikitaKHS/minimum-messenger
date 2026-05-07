@@ -34,6 +34,7 @@ class MessageOut(BaseModel):
     edited_at: datetime | None
     deleted_at: datetime | None
     sender_username: str | None = None
+    attachment_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}
 

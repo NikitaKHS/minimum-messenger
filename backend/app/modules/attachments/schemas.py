@@ -24,3 +24,11 @@ class AttachmentCompleteRequest(BaseModel):
 class DownloadUrlResponse(BaseModel):
     download_url: str
     expires_in: int
+
+
+class AttachmentOut(BaseModel):
+    id: uuid.UUID
+    file_size: int
+    mime_type: str | None
+
+    model_config = {"from_attributes": True}

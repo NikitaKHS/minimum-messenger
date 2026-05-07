@@ -9,6 +9,103 @@ import type { Chat } from "@/entities/chat/types";
 import type { Message } from "@/entities/message/types";
 import type { User } from "@/entities/user/types";
 
+// ─── attachment helpers ──────────────────────────────────────────────────────
+
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1_048_576).toFixed(1)} МБ`;
+}
+
+interface AttachmentMeta { name: string; type: string }
+
+function parseAttachmentPayload(payload: string): AttachmentMeta {
+  try {
+    const p = JSON.parse(payload) as AttachmentMeta;
+    if (p.name) return p;
+  } catch { /* not JSON */ }
+  return { name: payload || "файл", type: "" };
+}
+
+// ─── AttachmentBubble ────────────────────────────────────────────────────────
+
+function AttachmentBubble({
+  attachmentId,
+  payload,
+  isMine,
+}: {
+  attachmentId: string;
+  payload: string;
+  isMine: boolean;
+}) {
+  const meta = parseAttachmentPayload(payload);
+  const isImage = meta.type.startsWith("image/");
+
+  const { data: blobUrl } = useQuery<string>({
+    queryKey: ["attachment", attachmentId],
+    queryFn: async () => {
+      const res = await apiClient.get(`/attachments/${attachmentId}/download`, {
+        responseType: "blob",
+      });
+      return URL.createObjectURL(res.data as Blob);
+    },
+    staleTime: Infinity,
+    enabled: isImage,
+  });
+
+  async function handleDownload() {
+    const res = await apiClient.get(`/attachments/${attachmentId}/download`, {
+      responseType: "blob",
+    });
+    const url = URL.createObjectURL(res.data as Blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = meta.name;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (isImage) {
+    return (
+      <div className="rounded-xl overflow-hidden max-w-[240px] cursor-pointer" onClick={handleDownload}>
+        {blobUrl ? (
+          <img src={blobUrl} alt={meta.name} className="w-full object-cover" />
+        ) : (
+          <div className="w-40 h-28 bg-primary/10 flex items-center justify-center rounded-xl">
+            <svg className="w-6 h-6 text-muted-foreground animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </div>
+        )}
+        <p className="text-[11px] mt-1 opacity-70 truncate max-w-[240px]">{meta.name}</p>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleDownload}
+      className={`flex items-center gap-2 rounded-xl px-3 py-2 max-w-[240px] transition-opacity hover:opacity-80 ${
+        isMine ? "bg-primary-foreground/10" : "bg-primary/10"
+      }`}
+    >
+      <svg className="w-8 h-8 flex-shrink-0 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+      <div className="min-w-0 text-left">
+        <p className="text-sm font-medium truncate">{meta.name}</p>
+        <p className="text-[11px] opacity-60">скачать</p>
+      </div>
+      <svg className="w-4 h-4 flex-shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+    </button>
+  );
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function formatSidebarTime(iso: string): string {
@@ -125,13 +222,14 @@ function CreateGroupModal({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<User[]>([]);
 
-  const { data: results = [], isFetching } = useQuery<User[]>({
+  const { data: results = [], isFetching, isError } = useQuery<User[]>({
     queryKey: ["users-search-group", query],
     queryFn: async () => {
       const res = await apiClient.get("/users/search", { params: { q: query } });
-      return res.data;
+      return res.data as User[];
     },
     enabled: query.length >= 2,
+    staleTime: 0,
   });
 
   function toggle(user: User) {
@@ -197,7 +295,10 @@ function CreateGroupModal({
             {isFetching && (
               <p className="text-xs text-muted-foreground px-3 py-2">Поиск...</p>
             )}
-            {!isFetching && results.length === 0 && (
+            {isError && (
+              <p className="text-xs text-destructive px-3 py-2">Ошибка поиска</p>
+            )}
+            {!isFetching && !isError && results.length === 0 && (
               <p className="text-xs text-muted-foreground px-3 py-2">Не найдено</p>
             )}
             {results.map((user) => {
@@ -238,6 +339,12 @@ function CreateGroupModal({
 
 // ─── ChatWindow ──────────────────────────────────────────────────────────────
 
+interface PendingAttachment {
+  file: File;
+  id: string | null;
+  uploading: boolean;
+}
+
 function ChatWindow({
   chat,
   messages,
@@ -250,11 +357,13 @@ function ChatWindow({
   onBack: () => void;
 }) {
   const [text, setText] = useState("");
+  const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const markedReadRef = useRef(new Set<string>());
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { typingUsers, deliveryStatuses } = useChatStore();
 
   const chatId = chat.id;
@@ -294,21 +403,47 @@ function ChatWindow({
   }, [messages, currentUserId]);
 
   const sendMutation = useMutation({
-    mutationFn: async (msg: string) => {
+    mutationFn: async ({ msg, attachmentId }: { msg: string; attachmentId?: string }) => {
       await apiClient.post("/messages", {
         chat_id: chatId,
         client_message_id: crypto.randomUUID(),
         encrypted_payload: msg,
         encryption_version: "v1",
-        message_type: "text",
+        message_type: attachmentId ? "attachment" : "text",
         group_keys: [],
+        ...(attachmentId ? { attachment_id: attachmentId } : {}),
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", chatId] });
       setText("");
+      setPendingAttachment(null);
     },
   });
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!e.target) return;
+    (e.target as HTMLInputElement).value = "";
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      alert("Файл слишком большой (макс. 100 МБ)");
+      return;
+    }
+
+    setPendingAttachment({ file, id: null, uploading: true });
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await apiClient.post<{ id: string }>("/attachments/upload", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setPendingAttachment({ file, id: res.data.id, uploading: false });
+    } catch {
+      setPendingAttachment(null);
+      alert("Не удалось загрузить файл");
+    }
+  }
 
   function handleTyping(value: string) {
     setText(value);
@@ -327,13 +462,23 @@ function ChatWindow({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!text.trim() || sendMutation.isPending) return;
+    const hasAttachment = pendingAttachment?.id != null;
+    const hasText = text.trim().length > 0;
+    if ((!hasText && !hasAttachment) || sendMutation.isPending || pendingAttachment?.uploading) return;
+
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     if (isTypingRef.current) {
       isTypingRef.current = false;
       wsClient.send("typing.stopped", { chat_id: chatId });
     }
-    sendMutation.mutate(text.trim());
+
+    if (hasAttachment) {
+      const att = pendingAttachment!;
+      const payload = JSON.stringify({ name: att.file.name, type: att.file.type });
+      sendMutation.mutate({ msg: text.trim() || payload, attachmentId: att.id! });
+    } else {
+      sendMutation.mutate({ msg: text.trim() });
+    }
   }
 
   const sorted = [...messages].sort(
@@ -418,8 +563,24 @@ function ChatWindow({
                       : "bg-secondary text-secondary-foreground rounded-tl-sm"}
                   `}
                 >
-                  <span>{m.encrypted_payload}</span>
-                  {/* Time + delivery status — pinned to bottom-right */}
+                  {m.message_type === "attachment" && m.attachment_id ? (
+                    <div className="py-0.5">
+                      <AttachmentBubble
+                        attachmentId={m.attachment_id}
+                        payload={m.encrypted_payload}
+                        isMine={isMine}
+                      />
+                      {/* caption if text differs from JSON payload */}
+                      {(() => {
+                        try {
+                          const p = JSON.parse(m.encrypted_payload) as { name?: string };
+                          return p.name ? null : <p className="mt-1">{m.encrypted_payload}</p>;
+                        } catch { return <p className="mt-1">{m.encrypted_payload}</p>; }
+                      })()}
+                    </div>
+                  ) : (
+                    <span>{m.encrypted_payload}</span>
+                  )}
                   <span
                     className={`inline-flex items-center gap-0.5 ml-2 float-right mt-1 text-[11px] leading-none select-none ${
                       isMine ? "text-primary-foreground/60" : "text-muted-foreground"
@@ -441,20 +602,71 @@ function ChatWindow({
         <div ref={bottomRef} />
       </div>
 
+      {/* Pending attachment preview */}
+      {pendingAttachment && (
+        <div className="border-t px-3 pt-2 pb-1 flex items-center gap-2 text-sm flex-shrink-0">
+          <svg className="w-4 h-4 text-primary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+          <span className="truncate text-xs flex-1">
+            {pendingAttachment.file.name}
+            {" "}
+            <span className="text-muted-foreground">({formatBytes(pendingAttachment.file.size)})</span>
+            {pendingAttachment.uploading && (
+              <span className="text-primary ml-1">загрузка...</span>
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPendingAttachment(null)}
+            className="p-0.5 rounded-full hover:bg-accent transition-colors flex-shrink-0"
+            aria-label="Убрать вложение"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
         className="border-t p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex gap-2 flex-shrink-0"
       >
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileSelect}
+        />
+        {/* Attachment button */}
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="rounded-full w-9 h-9 flex items-center justify-center hover:bg-accent transition-colors flex-shrink-0 text-muted-foreground"
+          aria-label="Прикрепить файл"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+              d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+        </button>
         <input
           value={text}
           onChange={(e) => handleTyping(e.target.value)}
-          placeholder="Сообщение..."
+          placeholder={pendingAttachment ? "Подпись (необязательно)..." : "Сообщение..."}
           className="flex-1 border rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
         <button
           type="submit"
-          disabled={!text.trim() || sendMutation.isPending}
+          disabled={
+            (!text.trim() && !pendingAttachment?.id) ||
+            sendMutation.isPending ||
+            !!pendingAttachment?.uploading
+          }
           aria-label="Отправить"
           className="bg-primary text-primary-foreground rounded-full w-9 h-9 flex items-center justify-center disabled:opacity-50 hover:opacity-90 transition-opacity flex-shrink-0"
         >
