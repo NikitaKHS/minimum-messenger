@@ -14,10 +14,10 @@
 | Key exchange | ECDH P-256 |
 | Key derivation | HKDF-SHA-256 |
 | Message encryption | AES-GCM-256 |
-| Key storage | IndexedDB (browser), never synced |
+| Key storage | IndexedDB (browser) / Keychain-Keystore (mobile), never synced |
 | Fingerprints | SHA-256 of SPKI-encoded public key |
 
-All of this runs in the browser via the [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API). No third-party crypto libraries on the client.
+On the **web** client all crypto runs via the [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API). On the **mobile** client (React Native / Expo) the same primitives are implemented with `@noble/curves` and `@noble/hashes` — byte-compatible with the web implementation. Private keys on mobile are stored in `expo-secure-store`, which maps to the iOS Keychain and Android Keystore.
 
 ---
 

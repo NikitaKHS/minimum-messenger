@@ -1,35 +1,29 @@
-# Python
-__pycache__/
-*.py[cod]
-*.so
-.venv/
-venv/
-.env
-*.egg-info/
-dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-
-# Node
+# Dependencies
 node_modules/
-dist/
-.env.local
-.env.*.local
+mobile/node_modules/
+mobile/android/
+mobile/.expo/
+mobile/.expo-shared/
 
-# Docker
-.docker/
+# Build outputs
+frontend/dist/
+frontend/build/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# Alembic
-backend/alembic/versions/__pycache__/
+# Misc
+*.log

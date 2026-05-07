@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Minimum",
+    "slug": "minimum",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
+    "scheme": "minimum",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#070c1a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ru.nikitakh.minimum"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#070c1a"
+      },
+      "package": "ru.nikitakh.minimum"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}
