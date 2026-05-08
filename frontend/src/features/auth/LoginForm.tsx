@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { apiClient } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/store/auth";
-import { generateIdentityKeyPair, exportPublicKey, computeFingerprint } from "@/shared/crypto/e2ee";
+import { generateIdentityKeyPair, exportPublicKey, computeFingerprint, storeKeyPair, loadMyKeyPair } from "@/shared/crypto/e2ee";
 
 const schema = z.object({
   username: z.string().min(3).max(64),
@@ -24,10 +24,8 @@ export function LoginForm() {
 
   const mutation = useMutation({
     mutationFn: async (values: FormValues) => {
-      // Reuse the stored identity key pair if available; generate a new one only
-      // if this is a fresh browser/device with no key material yet.
       let keyPair: CryptoKeyPair;
-      const stored = await loadKeyPair();
+      const stored = await loadMyKeyPair();
       if (stored) {
         keyPair = stored;
       } else {
@@ -92,34 +90,3 @@ export function LoginForm() {
   );
 }
 
-function openKeyStore(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("minimum-keys", 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("keys", { keyPath: "fingerprint" });
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function loadKeyPair(): Promise<CryptoKeyPair | null> {
-  const db = await openKeyStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("keys", "readonly");
-    const req = tx.objectStore("keys").getAll();
-    req.onsuccess = () => {
-      const records = req.result as Array<{ fingerprint: string; privateKey: CryptoKey; publicKey: CryptoKey }>;
-      resolve(records.length > 0 ? { privateKey: records[0].privateKey, publicKey: records[0].publicKey } : null);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function storeKeyPair(keyPair: CryptoKeyPair, fingerprint: string): Promise<void> {
-  const db = await openKeyStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("keys", "readwrite");
-    tx.objectStore("keys").put({ fingerprint, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}

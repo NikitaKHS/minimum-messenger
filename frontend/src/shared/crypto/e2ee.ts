@@ -1,21 +1,6 @@
-/**
- * E2EE cryptographic primitives using the Web Crypto API.
- *
- * Identity keys: X25519 ECDH (P-256 as Web Crypto fallback)
- * Message encryption: AES-GCM-256
- * Key derivation: HKDF-SHA-256
- *
- * In the MVP the client:
- * 1. Generates an identity key pair at registration.
- * 2. Stores the private key in IndexedDB (never sent to backend).
- * 3. Sends only the public key to the backend.
- * 4. For direct messages: derives a shared secret via ECDH + HKDF.
- * 5. For group messages: encrypts the group key for each recipient device.
- */
-
 const ALGO = { name: "AES-GCM", length: 256 };
 const KEY_PAIR_ALGO = { name: "ECDH", namedCurve: "P-256" };
-const HKDF_ALGO = { name: "HKDF", hash: "SHA-256" };
+const E2E_PREFIX = "e2e1";
 
 // ─── Key generation ───────────────────────────────────────────────────────────
 
@@ -41,20 +26,18 @@ export async function computeFingerprint(publicKey: CryptoKey): Promise<string> 
     .join("");
 }
 
-// ─── ECDH key agreement ───────────────────────────────────────────────────────
+// ─── ECDH shared key derivation ───────────────────────────────────────────────
 
 export async function deriveSharedKey(
   privateKey: CryptoKey,
-  theirPublicKey: CryptoKey
+  theirPublicKey: CryptoKey,
 ): Promise<CryptoKey> {
   const bits = await crypto.subtle.deriveBits(
     { name: "ECDH", public: theirPublicKey },
     privateKey,
-    256
+    256,
   );
-  const keyMaterial = await crypto.subtle.importKey("raw", bits, HKDF_ALGO.name, false, [
-    "deriveKey",
-  ]);
+  const keyMaterial = await crypto.subtle.importKey("raw", bits, "HKDF", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     {
       name: "HKDF",
@@ -65,95 +48,74 @@ export async function deriveSharedKey(
     keyMaterial,
     ALGO,
     false,
-    ["encrypt", "decrypt"]
+    ["encrypt", "decrypt"],
   );
 }
 
-// ─── AES-GCM encrypt / decrypt ───────────────────────────────────────────────
+// ─── e2e1: payload format (compatible with mobile) ───────────────────────────
 
-export async function generateMessageKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey(ALGO, true, ["encrypt", "decrypt"]);
+export function isEncryptedPayload(payload: string): boolean {
+  return payload.startsWith(`${E2E_PREFIX}:`);
 }
 
-export async function encrypt(
-  key: CryptoKey,
-  plaintext: string
-): Promise<{ ciphertext: string; iv: string }> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(plaintext);
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-  return {
-    ciphertext: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-    iv: btoa(String.fromCharCode(...iv)),
-  };
+export async function encryptPayload(key: CryptoKey, plaintext: string): Promise<string> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce },
+    key,
+    new TextEncoder().encode(plaintext),
+  );
+  const b64 = (arr: Uint8Array) => btoa(String.fromCharCode(...arr));
+  return `${E2E_PREFIX}:${b64(nonce)}:${b64(new Uint8Array(ct))}`;
 }
 
-export async function decrypt(
-  key: CryptoKey,
-  ciphertext: string,
-  iv: string
-): Promise<string> {
-  const ct = Uint8Array.from(atob(ciphertext), (c) => c.charCodeAt(0));
-  const ivBytes = Uint8Array.from(atob(iv), (c) => c.charCodeAt(0));
-  const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ivBytes }, key, ct);
-  return new TextDecoder().decode(decrypted);
+export async function decryptPayload(key: CryptoKey, payload: string): Promise<string> {
+  if (!isEncryptedPayload(payload)) return payload;
+  const parts = payload.split(":");
+  if (parts.length !== 3) return payload;
+  const b2u = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: b2u(parts[1]) },
+      key,
+      b2u(parts[2]),
+    );
+    return new TextDecoder().decode(plain);
+  } catch {
+    return "[ошибка расшифровки]";
+  }
 }
 
-// ─── Group key encryption (wrapping) ──────────────────────────────────────────
+// ─── IndexedDB key store ──────────────────────────────────────────────────────
 
-export async function exportKey(key: CryptoKey): Promise<string> {
-  const raw = await crypto.subtle.exportKey("raw", key);
-  return btoa(String.fromCharCode(...new Uint8Array(raw)));
+function openKeyStore(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("minimum-keys", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("keys", { keyPath: "fingerprint" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-export async function importAesKey(b64: string): Promise<CryptoKey> {
-  const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey("raw", raw, ALGO, true, ["encrypt", "decrypt"]);
+export async function storeKeyPair(keyPair: CryptoKeyPair, fingerprint: string): Promise<void> {
+  const db = await openKeyStore();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("keys", "readwrite");
+    tx.objectStore("keys").put({ fingerprint, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
-/**
- * Encrypts the group key for a recipient's device using ECDH-derived shared key.
- */
-export async function encryptGroupKeyForDevice(
-  groupKey: CryptoKey,
-  myPrivateKey: CryptoKey,
-  recipientPublicKey: CryptoKey
-): Promise<string> {
-  const sharedKey = await deriveSharedKey(myPrivateKey, recipientPublicKey);
-  const rawGroupKey = await exportKey(groupKey);
-  const { ciphertext, iv } = await encrypt(sharedKey, rawGroupKey);
-  return JSON.stringify({ ciphertext, iv });
-}
-
-export async function decryptGroupKey(
-  encryptedGroupKey: string,
-  myPrivateKey: CryptoKey,
-  senderPublicKey: CryptoKey
-): Promise<CryptoKey> {
-  const sharedKey = await deriveSharedKey(myPrivateKey, senderPublicKey);
-  const { ciphertext, iv } = JSON.parse(encryptedGroupKey) as { ciphertext: string; iv: string };
-  const rawGroupKeyB64 = await decrypt(sharedKey, ciphertext, iv);
-  return importAesKey(rawGroupKeyB64);
-}
-
-// ─── Encrypted payload format ─────────────────────────────────────────────────
-
-export interface EncryptedMessage {
-  ciphertext: string;
-  iv: string;
-  version: "v1";
-}
-
-export async function encryptMessage(
-  key: CryptoKey,
-  text: string
-): Promise<string> {
-  const { ciphertext, iv } = await encrypt(key, text);
-  const payload: EncryptedMessage = { ciphertext, iv, version: "v1" };
-  return JSON.stringify(payload);
-}
-
-export async function decryptMessage(key: CryptoKey, payloadJson: string): Promise<string> {
-  const { ciphertext, iv } = JSON.parse(payloadJson) as EncryptedMessage;
-  return decrypt(key, ciphertext, iv);
+export async function loadMyKeyPair(): Promise<CryptoKeyPair | null> {
+  const db = await openKeyStore();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("keys", "readonly");
+    const req = tx.objectStore("keys").getAll();
+    req.onsuccess = () => {
+      const records = req.result as Array<{ fingerprint: string; privateKey: CryptoKey; publicKey: CryptoKey }>;
+      resolve(records.length > 0 ? { privateKey: records[0].privateKey, publicKey: records[0].publicKey } : null);
+    };
+    req.onerror = () => reject(req.error);
+  });
 }

@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api/client";
 import { wsClient } from "@/shared/api/websocket";
 import { useAuthStore } from "@/shared/store/auth";
 import { useChatStore } from "@/shared/store/chat";
 import { requestNotificationPermission, showNewMessageNotification } from "@/shared/notifications";
+import {
+  deriveSharedKey,
+  importPublicKey,
+  encryptPayload,
+  decryptPayload,
+  isEncryptedPayload,
+  loadMyKeyPair,
+} from "@/shared/crypto/e2ee";
 import type { Chat } from "@/entities/chat/types";
 import type { Message } from "@/entities/message/types";
-import type { User } from "@/entities/user/types";
+import type { User, Device } from "@/entities/user/types";
 
 // ─── attachment helpers ──────────────────────────────────────────────────────
 
@@ -337,6 +346,36 @@ function CreateGroupModal({
   );
 }
 
+// ─── DecryptedText ───────────────────────────────────────────────────────────
+
+function DecryptedText({
+  payload,
+  sharedKey,
+  className,
+}: {
+  payload: string;
+  sharedKey: CryptoKey | null;
+  className?: string;
+}) {
+  const [text, setText] = useState<string>(() =>
+    isEncryptedPayload(payload) ? (sharedKey ? "…" : "🔒") : payload,
+  );
+
+  useEffect(() => {
+    if (!isEncryptedPayload(payload)) {
+      setText(payload);
+      return;
+    }
+    if (!sharedKey) {
+      setText("🔒 Зашифровано");
+      return;
+    }
+    void decryptPayload(sharedKey, payload).then(setText).catch(() => setText("[ошибка]"));
+  }, [payload, sharedKey]);
+
+  return <span className={className}>{text}</span>;
+}
+
 // ─── ChatWindow ──────────────────────────────────────────────────────────────
 
 interface PendingAttachment {
@@ -358,6 +397,7 @@ function ChatWindow({
 }) {
   const [text, setText] = useState("");
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
+  const [sharedKey, setSharedKey] = useState<CryptoKey | null>(null);
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -365,6 +405,26 @@ function ChatWindow({
   const markedReadRef = useRef(new Set<string>());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { typingUsers, deliveryStatuses } = useChatStore();
+
+  useEffect(() => {
+    if (isGroup || !chat.other_user_id) { setSharedKey(null); return; }
+    let cancelled = false;
+    async function derive() {
+      const myKeys = await loadMyKeyPair().catch(() => null);
+      if (!myKeys || cancelled) return;
+      const res = await apiClient.get<Device[]>(`/users/${chat.other_user_id}/devices`).catch(() => null);
+      if (!res || cancelled) return;
+      const dev = res.data.find((d) => d.is_active && d.public_identity_key)
+        ?? res.data.find((d) => d.public_identity_key);
+      if (!dev?.public_identity_key || cancelled) return;
+      const theirPub = await importPublicKey(dev.public_identity_key).catch(() => null);
+      if (!theirPub || cancelled) return;
+      const key = await deriveSharedKey(myKeys.privateKey, theirPub).catch(() => null);
+      if (!cancelled && key) setSharedKey(key);
+    }
+    void derive();
+    return () => { cancelled = true; };
+  }, [chat.id, chat.other_user_id, isGroup]);
 
   const chatId = chat.id;
   const isGroup = chat.type === "group";
@@ -460,7 +520,7 @@ function ChatWindow({
     }, 3000);
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const hasAttachment = pendingAttachment?.id != null;
     const hasText = text.trim().length > 0;
@@ -472,12 +532,17 @@ function ChatWindow({
       wsClient.send("typing.stopped", { chat_id: chatId });
     }
 
+    const encrypt = async (s: string) =>
+      !isGroup && sharedKey ? encryptPayload(sharedKey, s) : s;
+
     if (hasAttachment) {
       const att = pendingAttachment!;
-      const payload = JSON.stringify({ name: att.file.name, type: att.file.type });
-      sendMutation.mutate({ msg: text.trim() || payload, attachmentId: att.id! });
+      const rawPayload = JSON.stringify({ name: att.file.name, type: att.file.type });
+      const msg = await encrypt(text.trim() || rawPayload);
+      sendMutation.mutate({ msg, attachmentId: att.id! });
     } else {
-      sendMutation.mutate({ msg: text.trim() });
+      const msg = await encrypt(text.trim());
+      sendMutation.mutate({ msg });
     }
   }
 
@@ -579,7 +644,7 @@ function ChatWindow({
                       })()}
                     </div>
                   ) : (
-                    <span>{m.encrypted_payload}</span>
+                    <DecryptedText payload={m.encrypted_payload} sharedKey={sharedKey} />
                   )}
                   <span
                     className={`inline-flex items-center gap-0.5 ml-2 float-right mt-1 text-[11px] leading-none select-none ${
@@ -899,6 +964,7 @@ export default function ChatsPage() {
   });
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
+  const navigate = useNavigate();
 
   // ─── render ────────────────────────────────────────────────────────────────
 
@@ -1043,9 +1109,11 @@ export default function ChatsPage() {
                             печатает <TypingDots />
                           </span>
                         ) : lastMsg ? (
-                          lastMsg.text.length > 38
-                            ? lastMsg.text.slice(0, 38) + "…"
-                            : lastMsg.text
+                          isEncryptedPayload(lastMsg.text)
+                            ? "🔒 Зашифровано"
+                            : lastMsg.text.length > 38
+                              ? lastMsg.text.slice(0, 38) + "…"
+                              : lastMsg.text
                         ) : (
                           <span className="capitalize">
                             {chat.type === "direct" ? "личный" : "группа"}
@@ -1063,6 +1131,20 @@ export default function ChatsPage() {
               </button>
             );
           })}
+        </div>
+
+        {/* Settings link */}
+        <div className="border-t p-2 flex-shrink-0">
+          <button
+            onClick={() => navigate("/settings")}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors text-sm text-muted-foreground"
+          >
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Настройки
+          </button>
         </div>
       </aside>
 

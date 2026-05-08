@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { apiClient } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/store/auth";
-import { generateIdentityKeyPair, exportPublicKey, computeFingerprint } from "@/shared/crypto/e2ee";
+import { generateIdentityKeyPair, exportPublicKey, computeFingerprint, storeKeyPair } from "@/shared/crypto/e2ee";
 
 const schema = z.object({
   username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/, "Letters, digits, _ . - only"),
@@ -107,21 +107,3 @@ export function RegisterForm() {
   );
 }
 
-async function storeKeyPair(keyPair: CryptoKeyPair, fingerprint: string): Promise<void> {
-  const db = await openKeyStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("keys", "readwrite");
-    tx.objectStore("keys").put({ fingerprint, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-function openKeyStore(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("minimum-keys", 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("keys", { keyPath: "fingerprint" });
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
