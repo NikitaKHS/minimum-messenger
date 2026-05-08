@@ -14,11 +14,22 @@ class UserService:
         self._db = db
         self._repo = UserRepository(db)
 
+    async def _to_out(self, user: User) -> UserOut:
+        fp = await self._repo.get_latest_device_fingerprint(user.id)
+        return UserOut(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            status=user.status,
+            created_at=user.created_at,
+            public_key_fingerprint=fp,
+        )
+
     async def get_me(self, user_id: uuid.UUID) -> UserOut:
         user = await self._repo.get_by_id(user_id)
         if not user:
             raise NotFoundError("User not found")
-        return UserOut.model_validate(user)
+        return await self._to_out(user)
 
     async def update_me(self, user_id: uuid.UUID, payload: UserUpdate) -> UserOut:
         user = await self._repo.get_by_id(user_id)
@@ -36,14 +47,17 @@ class UserService:
             user.email = payload.email
 
         await self._db.flush()
-        return UserOut.model_validate(user)
+        return await self._to_out(user)
 
     async def get_by_id(self, user_id: uuid.UUID) -> UserOut:
         user = await self._repo.get_by_id(user_id)
         if not user:
             raise NotFoundError("User not found")
-        return UserOut.model_validate(user)
+        return await self._to_out(user)
 
     async def search(self, current_user_id: uuid.UUID, query: str) -> list[UserOut]:
         users = await self._repo.search(current_user_id, query)
-        return [UserOut.model_validate(u) for u in users]
+        result = []
+        for u in users:
+            result.append(await self._to_out(u))
+        return result

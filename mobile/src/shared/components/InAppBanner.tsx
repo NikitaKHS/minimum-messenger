@@ -13,6 +13,7 @@ import { useChatStore } from '../store/chat';
 import { useAuthStore } from '../store/auth';
 import { useTheme } from '../hooks/useTheme';
 import { navigationRef } from '../navigation/ref';
+import { isEncrypted } from '../crypto/e2ee';
 import type { Chat } from '../../entities/chat/types';
 
 interface Banner {
@@ -76,10 +77,8 @@ export function InAppBanner() {
         chat?.title ??
         (p.sender_username ? `@${p.sender_username}` : 'Сообщение');
 
-      const text =
-        p.encrypted_payload.length > 60
-          ? `${p.encrypted_payload.slice(0, 60)}…`
-          : p.encrypted_payload;
+      const rawText = isEncrypted(p.encrypted_payload) ? 'Новое сообщение' : p.encrypted_payload;
+      const text = rawText.length > 60 ? `${rawText.slice(0, 60)}…` : rawText;
 
       show({
         chatId: p.chat_id,

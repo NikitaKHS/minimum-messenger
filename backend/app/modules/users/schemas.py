@@ -10,6 +10,7 @@ class UserOut(BaseModel):
     email: str | None
     status: str
     created_at: datetime
+    public_key_fingerprint: str | None = None
 
     model_config = {"from_attributes": True}
 

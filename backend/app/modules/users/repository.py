@@ -10,6 +10,15 @@ class UserRepository:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
+    async def get_latest_device_fingerprint(self, user_id: uuid.UUID) -> str | None:
+        from app.modules.devices.models import Device  # noqa: PLC0415
+        return await self._db.scalar(
+            select(Device.public_key_fingerprint)
+            .where(Device.user_id == user_id, Device.is_active.is_(True))
+            .order_by(Device.created_at.desc())
+            .limit(1)
+        )
+
     async def get_by_id(self, user_id: uuid.UUID) -> User | None:
         return await self._db.scalar(
             select(User).where(User.id == user_id, User.deleted_at.is_(None))

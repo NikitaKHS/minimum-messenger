@@ -9,6 +9,7 @@
     "build:ios": "eas build -p ios --profile preview"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^1.6.0",
     "@noble/hashes": "^1.6.1",
     "@react-native-async-storage/async-storage": "1.23.1",

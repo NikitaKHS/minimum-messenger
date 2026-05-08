@@ -41,6 +41,15 @@ import { useTheme } from '../shared/hooks/useTheme';
 import type { ThemeColors } from '../shared/theme';
 import type { Message } from '../entities/message/types';
 import type { User } from '../entities/user/types';
+import {
+  loadIdentityKey,
+  deriveSharedAesKey,
+  encryptWithKey,
+  decryptWithKey,
+  isEncrypted,
+  spkiB64ToPubKey,
+} from '../shared/crypto/e2ee';
+import type { Device } from '../entities/device/types';
 import type { ChatsStackParams } from '../navigation';
 
 type Props = NativeStackScreenProps<ChatsStackParams, 'Chat'>;
@@ -461,6 +470,7 @@ export function ChatScreen({ route, navigation }: Props) {
   const [text, setText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [showVerify, setShowVerify] = useState(false);
+  const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const markedReadRef = useRef(new Set<string>());
@@ -478,6 +488,27 @@ export function ChatScreen({ route, navigation }: Props) {
     clearUnread(chatId);
     return () => { markedReadRef.current.clear(); };
   }, [chatId, clearUnread]);
+
+  const { data: theirDevices } = useQuery<Device[]>({
+    queryKey: ['user-devices', otherUserId],
+    queryFn: async () => (await apiClient.get(`/users/${otherUserId}/devices`)).data as Device[],
+    enabled: !!otherUserId,
+    staleTime: 5 * 60_000,
+  });
+
+  useEffect(() => {
+    if (!otherUserId || !theirDevices?.length) return;
+    const dev = theirDevices.find((d) => d.is_active && d.public_identity_key)
+      ?? theirDevices.find((d) => d.public_identity_key);
+    if (!dev?.public_identity_key) return;
+    loadIdentityKey()
+      .then((myPriv) => {
+        if (!myPriv) return;
+        const theirPub = spkiB64ToPubKey(dev.public_identity_key!);
+        setSharedKey(deriveSharedAesKey(myPriv, theirPub));
+      })
+      .catch(() => {});
+  }, [otherUserId, theirDevices]);
 
   useEffect(() => {
     navigation.setOptions({
@@ -699,12 +730,14 @@ export function ChatScreen({ route, navigation }: Props) {
       withSpring(1, { duration: 120 }),
     );
 
+    const encrypt = (s: string) => !isGroup && sharedKey ? encryptWithKey(s, sharedKey) : s;
+
     if (hasAttachment) {
       const att = pendingAttachment!;
       const payload = JSON.stringify({ name: att.name, type: att.type });
-      sendMutation.mutate({ msg: text.trim() || payload, attachmentId: att.serverId! });
+      sendMutation.mutate({ msg: encrypt(text.trim() || payload), attachmentId: att.serverId! });
     } else {
-      sendMutation.mutate({ msg: text.trim() });
+      sendMutation.mutate({ msg: encrypt(text.trim()) });
     }
   }
 
@@ -757,7 +790,9 @@ export function ChatScreen({ route, navigation }: Props) {
               />
             ) : (
               <Text style={[styles.msgText, isMine ? styles.msgTextMine : styles.msgTextTheirs]}>
-                {m.encrypted_payload}
+                {!isGroup && sharedKey
+                  ? decryptWithKey(m.encrypted_payload, sharedKey)
+                  : m.encrypted_payload}
               </Text>
             )}
             <View style={styles.msgMeta}>
@@ -772,7 +807,7 @@ export function ChatScreen({ route, navigation }: Props) {
         </Animated.View>
       );
     },
-    [userId, deliveryStatuses, isGroup, styles, colors],
+    [userId, deliveryStatuses, isGroup, sharedKey, styles, colors],
   );
 
   const keyExtractor = useCallback(

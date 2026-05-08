@@ -11,6 +11,7 @@ import { initApiClient } from '../shared/api/client';
 import { initAuthApi, refreshAccessToken } from '../shared/api/auth';
 import { useChatStore } from '../shared/store/chat';
 import { useTheme } from '../shared/hooks/useTheme';
+import { isEncrypted } from '../shared/crypto/e2ee';
 import { navigationRef } from '../shared/navigation/ref';
 import { InAppBanner } from '../shared/components/InAppBanner';
 
@@ -151,10 +152,10 @@ export function Navigation() {
           const title =
             p.chat_title ??
             (p.sender_username ? `@${p.sender_username}` : 'Minimum');
-          const body =
-            p.encrypted_payload.length > 80
-              ? `${p.encrypted_payload.slice(0, 80)}…`
-              : p.encrypted_payload;
+          const rawBody = isEncrypted(p.encrypted_payload)
+            ? 'Новое сообщение'
+            : p.encrypted_payload;
+          const body = rawBody.length > 80 ? `${rawBody.slice(0, 80)}…` : rawBody;
           void Notifications.scheduleNotificationAsync({
             content: { title, body, data: { chatId: p.chat_id } },
             trigger: null,
@@ -162,8 +163,11 @@ export function Navigation() {
         }
       }
 
+      const previewText = isEncrypted(p.encrypted_payload)
+        ? '🔒 Зашифровано'
+        : p.encrypted_payload;
       setLastMessage(p.chat_id, {
-        text: p.encrypted_payload,
+        text: previewText,
         at: p.created_at,
         senderId: p.sender_user_id,
       });

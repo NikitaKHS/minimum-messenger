@@ -1,9 +1,12 @@
 import { p256 } from '@noble/curves/p256';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
+import { randomBytes } from '@noble/hashes/utils';
+import { gcm } from '@noble/ciphers/aes';
 import * as SecureStore from 'expo-secure-store';
 
 const PRIVATE_KEY_STORE = 'minimum_identity_priv_v1';
+const E2E_PREFIX = 'e2e1';
 
 const SPKI_PREFIX = new Uint8Array([
   0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
@@ -75,12 +78,26 @@ export function deriveSharedAesKey(
   return hkdf(sha256, sharedX, new Uint8Array(32), new TextEncoder().encode('minimum-v1'), 32);
 }
 
-export function encryptMessagePayload(plaintext: string): string {
-  return plaintext;
+export function encryptWithKey(plaintext: string, sharedKey: Uint8Array): string {
+  const nonce = randomBytes(12);
+  const ct = gcm(sharedKey, nonce).encrypt(new TextEncoder().encode(plaintext));
+  return `${E2E_PREFIX}:${bytesToB64(nonce)}:${bytesToB64(ct)}`;
 }
 
-export function decryptMessagePayload(payload: string): string {
-  return payload;
+export function decryptWithKey(payload: string, sharedKey: Uint8Array): string {
+  if (!payload.startsWith(`${E2E_PREFIX}:`)) return payload;
+  const parts = payload.split(':');
+  if (parts.length !== 3) return payload;
+  try {
+    const plain = gcm(sharedKey, b64ToBytes(parts[1])).decrypt(b64ToBytes(parts[2]));
+    return new TextDecoder().decode(plain);
+  } catch {
+    return '[ошибка расшифровки]';
+  }
+}
+
+export function isEncrypted(payload: string): boolean {
+  return payload.startsWith(`${E2E_PREFIX}:`);
 }
 
 export function computeFingerprint(spkiB64: string): string {
