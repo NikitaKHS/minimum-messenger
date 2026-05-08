@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp \"c:/Users/khokhlov.n/Desktop/Встреча мессенджер/Minimum/mobile/src/screens/RegisterScreen.tsx\" \"/c/minimum-build/src/screens/RegisterScreen.tsx\")",
+      "Bash(cp \"c:/Users/khokhlov.n/Desktop/Встреча мессенджер/Minimum/mobile/src/screens/LoginScreen.tsx\" \"/c/minimum-build/src/screens/LoginScreen.tsx\")",
+      "Bash(./gradlew assembleDebug)",
+      "Bash(./gradlew assembleDebug --stacktrace)",
+      "Bash(./gradlew --stop)"
+    ]
+  }
+}

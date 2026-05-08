@@ -92,6 +92,27 @@ async def _handle_client_event(
     elif event_type == events.CLIENT_PRESENCE_UPDATE:
         await redis.setex(f"presence:{user_id}", _PRESENCE_TTL, "online")
 
+    elif event_type in (
+        events.CLIENT_CALL_INVITE,
+        events.CLIENT_CALL_ACCEPT,
+        events.CLIENT_CALL_DECLINE,
+        events.CLIENT_CALL_END,
+        events.CLIENT_CALL_OFFER,
+        events.CLIENT_CALL_ANSWER,
+        events.CLIENT_CALL_ICE,
+    ):
+        peer_id_str = payload.get("peer_user_id")
+        if peer_id_str:
+            try:
+                peer_id = uuid.UUID(peer_id_str)
+                server_event = event_type.replace("call.", "call.")
+                await publish_to_user(redis, peer_id, {
+                    "type": server_event,
+                    "payload": {**payload, "from_user_id": str(user_id)},
+                })
+            except ValueError:
+                pass
+
 
 async def _broadcast_chat_event(
     redis: Any, chat_id: str, event: dict, exclude: uuid.UUID | None = None

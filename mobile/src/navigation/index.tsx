@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AppState,
   Platform,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { NavigationContainer, DarkTheme, DefaultTheme, DrawerActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -259,10 +260,17 @@ function MainStack() {
   );
 }
 
+interface IncomingCall {
+  fromUserId: string;
+  callerName: string;
+  chatId: string;
+}
+
 export function Navigation() {
   const { accessToken, userId, initialized } = useAuthStore();
   const { incUnread, setLastMessage, setDelivered, setRead, setTyping } = useChatStore();
   const { colors, isDark } = useTheme();
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
 
   const navTheme = {
     ...(isDark ? DarkTheme : DefaultTheme),
@@ -374,12 +382,27 @@ export function Navigation() {
       setTyping(p.chat_id, p.user_id, false);
     });
 
+    const offCallInvite = wsClient.on('call.invite', (raw) => {
+      const p = raw as { from_user_id: string; caller_name?: string; chat_id: string };
+      setIncomingCall({
+        fromUserId: p.from_user_id,
+        callerName: p.caller_name ?? `@${p.from_user_id.slice(0, 8)}`,
+        chatId: p.chat_id,
+      });
+    });
+
+    const offCallEnd = wsClient.on('call.end', () => setIncomingCall(null));
+    const offCallDecline = wsClient.on('call.decline', () => setIncomingCall(null));
+
     return () => {
       offMsg();
       offDelivered();
       offRead();
       offTypingStart();
       offTypingStop();
+      offCallInvite();
+      offCallEnd();
+      offCallDecline();
       wsClient.disconnect();
     };
   }, [accessToken, userId, incUnread, setLastMessage, setDelivered, setRead, setTyping]);
@@ -421,6 +444,67 @@ export function Navigation() {
             />
           </AppDrawer.Navigator>
           <InAppBanner />
+          {incomingCall && (
+            <Modal transparent animationType="slide" statusBarTranslucent>
+              <View style={{
+                flex: 1,
+                backgroundColor: 'rgba(0,0,0,0.85)',
+                justifyContent: 'flex-end',
+                padding: 24,
+                paddingBottom: 48,
+              }}>
+                <View style={{
+                  backgroundColor: colors.surface,
+                  borderRadius: 24,
+                  padding: 28,
+                  alignItems: 'center',
+                  gap: 12,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                }}>
+                  <View style={{
+                    width: 64, height: 64, borderRadius: 32,
+                    backgroundColor: `${colors.primary}25`,
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Text style={{ fontSize: 28 }}>📞</Text>
+                  </View>
+                  <Text style={{ fontSize: 13, color: colors.textMuted }}>Входящий звонок</Text>
+                  <Text style={{ fontSize: 20, fontWeight: '700', color: colors.text }}>
+                    {incomingCall.callerName}
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 32, marginTop: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        wsClient.send('call.decline', { peer_user_id: incomingCall.fromUserId });
+                        setIncomingCall(null);
+                      }}
+                      style={{
+                        width: 60, height: 60, borderRadius: 30,
+                        backgroundColor: colors.destructive,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ fontSize: 26 }}>📵</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        wsClient.send('call.accept', { peer_user_id: incomingCall.fromUserId });
+                        setIncomingCall(null);
+                      }}
+                      style={{
+                        width: 60, height: 60, borderRadius: 30,
+                        backgroundColor: '#22c55e',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ fontSize: 26 }}>📞</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+          )}
         </>
       ) : (
         <AuthStack.Navigator

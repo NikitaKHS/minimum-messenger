@@ -32,6 +32,8 @@ import Animated, {
 import { KeyboardAvoidingView } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { Audio } from 'expo-av';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { apiClient } from '../shared/api/client';
 import { wsClient } from '../shared/api/websocket';
@@ -298,6 +300,30 @@ function makeStyles(colors: ThemeColors) {
       marginTop: 4,
     },
     verifyCloseText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    voiceBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 160, paddingVertical: 2 },
+    voiceProgress: { flex: 1, height: 3, borderRadius: 2, overflow: 'hidden' },
+    voiceProgressFill: { height: '100%', borderRadius: 2 },
+    voiceDuration: { fontSize: 11, minWidth: 32 },
+    micBtn: {
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+      marginBottom: 2,
+    },
+    recordingBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      backgroundColor: `${colors.destructive}15`,
+      borderTopWidth: 1,
+      borderTopColor: `${colors.destructive}30`,
+      gap: 8,
+    },
+    recordingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.destructive },
+    recordingText: { fontSize: 13, color: colors.destructive, fontWeight: '500' },
   });
 }
 
@@ -449,6 +475,91 @@ function AttachmentPreview({
   );
 }
 
+function VoiceMessageBubble({
+  attachmentId,
+  payload,
+  isMine,
+  colors,
+  styles,
+}: {
+  attachmentId: string;
+  payload: string;
+  isMine: boolean;
+  colors: ThemeColors;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  let duration = 0;
+  try { duration = (JSON.parse(payload) as { duration?: number }).duration ?? 0; } catch { /**/ }
+
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [audioUri, setAudioUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get(`/attachments/${attachmentId}/download`, { responseType: 'arraybuffer' })
+      .then((res) => {
+        if (cancelled) return;
+        const bytes = new Uint8Array(res.data as ArrayBuffer);
+        let bin = '';
+        bytes.forEach((b) => (bin += String.fromCharCode(b)));
+        setAudioUri(`data:audio/m4a;base64,${btoa(bin)}`);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [attachmentId]);
+
+  useEffect(() => () => { void sound?.unloadAsync(); }, [sound]);
+
+  async function togglePlay() {
+    if (!audioUri) return;
+    if (playing) {
+      await sound?.pauseAsync();
+      setPlaying(false);
+      return;
+    }
+    if (sound) {
+      await sound.playFromPositionAsync(0);
+      setPlaying(true);
+      return;
+    }
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+    const { sound: newSound } = await Audio.Sound.createAsync(
+      { uri: audioUri },
+      { shouldPlay: true },
+    );
+    newSound.setOnPlaybackStatusUpdate((s) => {
+      if (!s.isLoaded) return;
+      const pos = s.positionMillis / (s.durationMillis ?? 1);
+      setProgress(pos);
+      if (s.didJustFinish) { setPlaying(false); setProgress(0); }
+    });
+    setSound(newSound);
+    setPlaying(true);
+  }
+
+  const fmtDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+  const trackBg = isMine ? `${colors.outgoingText}25` : colors.border;
+  const fillBg = isMine ? colors.outgoingText : colors.primary;
+  const textColor = isMine ? `${colors.outgoingText}80` : colors.textMuted;
+
+  return (
+    <TouchableOpacity onPress={togglePlay} activeOpacity={0.7} style={styles.voiceBubble}>
+      <Ionicons
+        name={playing ? 'pause-circle' : 'play-circle'}
+        size={28}
+        color={isMine ? colors.outgoingText : colors.primary}
+      />
+      <View style={[styles.voiceProgress, { backgroundColor: trackBg }]}>
+        <View style={[styles.voiceProgressFill, { width: `${progress * 100}%`, backgroundColor: fillBg }]} />
+      </View>
+      <Text style={[styles.voiceDuration, { color: textColor }]}>{fmtDur(duration)}</Text>
+    </TouchableOpacity>
+  );
+}
+
 interface PendingAttachment {
   uri: string;
   name: string;
@@ -471,6 +582,10 @@ export function ChatScreen({ route, navigation }: Props) {
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [showVerify, setShowVerify] = useState(false);
   const [sharedKey, setSharedKey] = useState<Uint8Array | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const durationTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const markedReadRef = useRef(new Set<string>());
@@ -519,12 +634,21 @@ export function ChatScreen({ route, navigation }: Props) {
               <Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            onPress={() => Alert.alert('Звонки', 'Появятся в следующем обновлении')}
-            hitSlop={8}
-          >
-            <Ionicons name="call-outline" size={22} color={colors.textSecondary} />
-          </TouchableOpacity>
+          {!!otherUserId && (
+            <TouchableOpacity
+              onPress={() => {
+                wsClient.send('call.invite', {
+                  peer_user_id: otherUserId,
+                  chat_id: chatId,
+                  caller_name: 'Вы',
+                });
+                Alert.alert('Звонок', 'Вызов отправлен. Ожидание ответа...');
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="call-outline" size={22} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
         </View>
       ),
     });
@@ -645,13 +769,13 @@ export function ChatScreen({ route, navigation }: Props) {
   }, [typing, isGroup, usernameMap]);
 
   const sendMutation = useMutation({
-    mutationFn: async ({ msg, attachmentId }: { msg: string; attachmentId?: string }) => {
+    mutationFn: async ({ msg, attachmentId, msgType }: { msg: string; attachmentId?: string; msgType?: string }) => {
       await apiClient.post('/messages', {
         chat_id: chatId,
         client_message_id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         encrypted_payload: msg,
         encryption_version: 'v1',
-        message_type: attachmentId ? 'attachment' : 'text',
+        message_type: msgType ?? (attachmentId ? 'attachment' : 'text'),
         group_keys: [],
         ...(attachmentId ? { attachment_id: attachmentId } : {}),
       });
@@ -663,6 +787,21 @@ export function ChatScreen({ route, navigation }: Props) {
     },
     onError: () => Alert.alert('Ошибка', 'Не удалось отправить сообщение'),
   });
+
+  async function uploadFile(uri: string, name: string, type: string, size: number) {
+    setPendingAttachment({ uri, name, type, size, serverId: null, uploading: true });
+    try {
+      const form = new FormData();
+      form.append('file', { uri, name, type } as unknown as Blob);
+      const res = await apiClient.post<{ id: string }>('/attachments/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setPendingAttachment((prev) => prev ? { ...prev, serverId: res.data.id, uploading: false } : null);
+    } catch {
+      setPendingAttachment(null);
+      Alert.alert('Ошибка', 'Не удалось загрузить файл');
+    }
+  }
 
   async function handlePickImage() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -680,22 +819,84 @@ export function ChatScreen({ route, navigation }: Props) {
       Alert.alert('Файл слишком большой', 'Максимум 100 МБ');
       return;
     }
+    await uploadFile(
+      asset.uri,
+      asset.fileName ?? `media_${Date.now()}.jpg`,
+      asset.mimeType ?? 'image/jpeg',
+      asset.fileSize ?? 0,
+    );
+  }
 
-    const fileName = asset.fileName ?? `image_${Date.now()}.jpg`;
-    const mimeType = asset.mimeType ?? 'image/jpeg';
+  async function handlePickDocument() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    if ((asset.size ?? 0) > 100 * 1024 * 1024) {
+      Alert.alert('Файл слишком большой', 'Максимум 100 МБ');
+      return;
+    }
+    await uploadFile(
+      asset.uri,
+      asset.name,
+      asset.mimeType ?? 'application/octet-stream',
+      asset.size ?? 0,
+    );
+  }
 
-    setPendingAttachment({ uri: asset.uri, name: fileName, type: mimeType, size: asset.fileSize ?? 0, serverId: null, uploading: true });
+  function showAttachMenu() {
+    Alert.alert('Вложение', 'Выберите тип', [
+      { text: 'Фото / видео', onPress: handlePickImage },
+      { text: 'Файл', onPress: handlePickDocument },
+      { text: 'Отмена', style: 'cancel' },
+    ]);
+  }
+
+  async function handleStartRecord() {
+    const perm = await Audio.requestPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert('Нет доступа', 'Разрешите доступ к микрофону в настройках');
+      return;
+    }
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    const { recording } = await Audio.Recording.createAsync(
+      Audio.RecordingOptionsPresets.HIGH_QUALITY,
+    );
+    recordingRef.current = recording;
+    setIsRecording(true);
+    setRecordingDuration(0);
+    durationTimer.current = setInterval(() => setRecordingDuration((d) => d + 1), 1000);
+  }
+
+  async function handleStopRecord(send: boolean) {
+    if (!recordingRef.current) return;
+    if (durationTimer.current) clearInterval(durationTimer.current);
+    setIsRecording(false);
+
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    await rec.stopAndUnloadAsync();
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+    const uri = rec.getURI();
+
+    if (!send || !uri || recordingDuration < 1) return;
+
+    const fileName = `voice_${Date.now()}.m4a`;
+    const dur = recordingDuration;
+    const payload = JSON.stringify({ name: fileName, type: 'audio/m4a', duration: dur });
+    const encrypt = (s: string) => !isGroup && sharedKey ? encryptWithKey(s, sharedKey) : s;
 
     try {
       const form = new FormData();
-      form.append('file', { uri: asset.uri, name: fileName, type: mimeType } as unknown as Blob);
+      form.append('file', { uri, name: fileName, type: 'audio/m4a' } as unknown as Blob);
       const res = await apiClient.post<{ id: string }>('/attachments/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setPendingAttachment((prev) => prev ? { ...prev, serverId: res.data.id, uploading: false } : null);
+      sendMutation.mutate({ msg: encrypt(payload), attachmentId: res.data.id, msgType: 'voice' });
     } catch {
-      setPendingAttachment(null);
-      Alert.alert('Ошибка', 'Не удалось загрузить файл');
+      Alert.alert('Ошибка', 'Не удалось отправить голосовое сообщение');
     }
   }
 
@@ -780,6 +981,14 @@ export function ChatScreen({ route, navigation }: Props) {
               <Text style={[styles.deletedText, isMine && styles.deletedTextMine]}>
                 Сообщение удалено
               </Text>
+            ) : m.message_type === 'voice' && m.attachment_id ? (
+              <VoiceMessageBubble
+                attachmentId={m.attachment_id}
+                payload={m.encrypted_payload}
+                isMine={isMine}
+                colors={colors}
+                styles={styles}
+              />
             ) : m.message_type === 'attachment' && m.attachment_id ? (
               <AttachmentPreview
                 attachmentId={m.attachment_id}
@@ -868,9 +1077,23 @@ export function ChatScreen({ route, navigation }: Props) {
         </View>
       )}
 
+      {isRecording && (
+        <View style={styles.recordingBar}>
+          <Animated.View
+            style={[styles.recordingDot, { opacity: useSharedValue(1).value }]}
+          />
+          <Text style={styles.recordingText}>
+            Запись {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
+          </Text>
+          <TouchableOpacity onPress={() => void handleStopRecord(false)} style={{ marginLeft: 'auto' }}>
+            <Text style={{ color: colors.textMuted, fontSize: 13 }}>Отмена</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={styles.composer}>
-        <TouchableOpacity style={styles.attachBtn} onPress={handlePickImage} activeOpacity={0.7}>
-          <Text style={styles.attachBtnIcon}>📎</Text>
+        <TouchableOpacity style={styles.attachBtn} onPress={showAttachMenu} activeOpacity={0.7}>
+          <Ionicons name="attach-outline" size={22} color={colors.textMuted} />
         </TouchableOpacity>
 
         <TextInput
@@ -882,18 +1105,29 @@ export function ChatScreen({ route, navigation }: Props) {
           multiline
           maxLength={4000}
           returnKeyType="default"
+          editable={!isRecording}
         />
 
-        <Animated.View style={sendButtonStyle}>
+        {canSend ? (
+          <Animated.View style={sendButtonStyle}>
+            <TouchableOpacity
+              style={styles.sendBtn}
+              onPress={handleSend}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="send" size={18} color="#fff" />
+            </TouchableOpacity>
+          </Animated.View>
+        ) : (
           <TouchableOpacity
-            style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
-            onPress={handleSend}
-            disabled={!canSend}
+            style={[styles.sendBtn, isRecording && { backgroundColor: colors.destructive }]}
+            onPressIn={() => void handleStartRecord()}
+            onPressOut={() => void handleStopRecord(true)}
             activeOpacity={0.8}
           >
-            <Text style={styles.sendBtnIcon}>↑</Text>
+            <Ionicons name={isRecording ? 'stop' : 'mic'} size={18} color="#fff" />
           </TouchableOpacity>
-        </Animated.View>
+        )}
       </View>
 
       <Modal
