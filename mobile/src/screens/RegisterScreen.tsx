@@ -45,10 +45,25 @@ export function RegisterScreen({ navigation }: Props) {
     }
 
     setLoading(true);
+    let keyPair: Awaited<ReturnType<typeof generateIdentityKeyPair>> | null = null;
     try {
-      const keyPair = await generateIdentityKeyPair();
-      await storeIdentityKey(keyPair.privateKey);
+      keyPair = await generateIdentityKeyPair();
+    } catch (cryptoErr: unknown) {
+      Alert.alert(
+        'Ошибка устройства',
+        `Не удалось создать ключ шифрования: ${(cryptoErr as Error)?.message ?? String(cryptoErr)}`,
+      );
+      setLoading(false);
+      return;
+    }
 
+    try {
+      await storeIdentityKey(keyPair.privateKey);
+    } catch {
+      // SecureStore unavailable — продолжаем без сохранения ключа
+    }
+
+    try {
       const res = await apiClient.post<TokenResponse>('/auth/register', {
         username: username.trim(),
         password,
@@ -61,9 +76,15 @@ export function RegisterScreen({ navigation }: Props) {
 
       setSession(res.data.access_token, res.data.refresh_token, res.data.user_id, res.data.device_id);
     } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
+      const rawDetail = e?.response?.data?.detail;
       const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      Alert.alert('Ошибка регистрации', detail ?? 'Попробуйте другое имя пользователя');
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : Array.isArray(rawDetail)
+            ? (rawDetail as Array<{ msg?: string }>).map((d) => d.msg ?? JSON.stringify(d)).join('; ')
+            : e?.message ?? 'Неизвестная ошибка';
+      Alert.alert('Ошибка регистрации', detail);
     } finally {
       setLoading(false);
     }

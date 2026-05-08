@@ -45,10 +45,10 @@ export function LoginScreen({ navigation }: Props) {
   async function handleLogin() {
     if (!username.trim() || !password.trim()) return;
     setLoading(true);
-    try {
-      let storedPrivKey = await loadIdentityKey();
-      let keyPair;
+    let keyPair: { privateKey: Uint8Array; publicKey: Uint8Array; publicKeySpki: string; fingerprint: string } | null = null;
 
+    try {
+      const storedPrivKey = await loadIdentityKey().catch(() => null);
       if (storedPrivKey) {
         const pub = p256.getPublicKey(storedPrivKey, false);
         const spki = pubKeyToSpkiB64(pub);
@@ -56,9 +56,18 @@ export function LoginScreen({ navigation }: Props) {
         keyPair = { privateKey: storedPrivKey, publicKey: pub, publicKeySpki: spki, fingerprint: fp };
       } else {
         keyPair = await generateIdentityKeyPair();
-        await storeIdentityKey(keyPair.privateKey);
+        await storeIdentityKey(keyPair.privateKey).catch(() => null);
       }
+    } catch (cryptoErr: unknown) {
+      Alert.alert(
+        'Ошибка устройства',
+        `Не удалось создать ключ шифрования: ${(cryptoErr as Error)?.message ?? String(cryptoErr)}`,
+      );
+      setLoading(false);
+      return;
+    }
 
+    try {
       const res = await apiClient.post<TokenResponse>('/auth/login', {
         username: username.trim(),
         password,
@@ -71,9 +80,14 @@ export function LoginScreen({ navigation }: Props) {
 
       setSession(res.data.access_token, res.data.refresh_token, res.data.user_id, res.data.device_id);
     } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
+      const rawDetail = e?.response?.data?.detail;
       const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-        'Неверный логин или пароль';
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : Array.isArray(rawDetail)
+            ? (rawDetail as Array<{ msg?: string }>).map((d) => d.msg ?? JSON.stringify(d)).join('; ')
+            : e?.message ?? 'Неизвестная ошибка';
       Alert.alert('Ошибка входа', msg);
     } finally {
       setLoading(false);
