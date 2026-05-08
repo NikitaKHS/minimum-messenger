@@ -16,9 +16,10 @@ import {
   ActivityIndicator,
   Image,
   Pressable,
-  Linking,
+  Modal,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   FadeInDown,
   useAnimatedStyle,
@@ -36,8 +37,10 @@ import { apiClient } from '../shared/api/client';
 import { wsClient } from '../shared/api/websocket';
 import { useChatStore } from '../shared/store/chat';
 import { useAuthStore } from '../shared/store/auth';
-import { theme } from '../shared/theme';
+import { useTheme } from '../shared/hooks/useTheme';
+import type { ThemeColors } from '../shared/theme';
 import type { Message } from '../entities/message/types';
+import type { User } from '../entities/user/types';
 import type { ChatsStackParams } from '../navigation';
 
 type Props = NativeStackScreenProps<ChatsStackParams, 'Chat'>;
@@ -50,21 +53,22 @@ function formatMsgTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatDateLabel(iso: string): string {
+function calDay(iso: string): number {
   const d = new Date(iso);
-  const now = new Date();
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function formatDateLabel(iso: string): string {
+  const todayStart = calDay(new Date().toISOString());
+  const dStart = calDay(iso);
+  const diffDays = Math.round((todayStart - dStart) / 86_400_000);
   if (diffDays === 0) return 'Сегодня';
   if (diffDays === 1) return 'Вчера';
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 function sameDay(a: string, b: string): boolean {
   return new Date(a).toDateString() === new Date(b).toDateString();
-}
-
-function initials(name: string): string {
-  return (name.replace('@', '')[0] ?? '?').toUpperCase();
 }
 
 function formatBytes(bytes: number): string {
@@ -88,35 +92,233 @@ function parseAttachmentMeta(payload: string): AttachmentMeta {
   return { name: payload || 'файл', type: '' };
 }
 
-function DeliveryIcon({ delivered, read }: { delivered: boolean; read: boolean }) {
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    loadingCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    listContent: { paddingHorizontal: 12, paddingVertical: 8 },
+    typingBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 16,
+      paddingVertical: 6,
+      backgroundColor: colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    typingDots: { flexDirection: 'row', gap: 3, alignItems: 'center' },
+    typingDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: colors.primary },
+    typingLabel: { fontSize: 12, color: colors.primary },
+    emptyChat: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
+    emptyChatText: { fontSize: 15, color: colors.textSecondary, fontWeight: '500' },
+    emptyChatHint: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
+    dateSepWrap: { alignItems: 'center', marginVertical: 12 },
+    dateSep: {
+      backgroundColor: colors.card,
+      borderRadius: 9999,
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    dateSepText: { fontSize: 11, color: colors.textMuted },
+    msgRow: { flexDirection: 'row', marginVertical: 2, alignItems: 'flex-end', gap: 4 },
+    msgRowLeft: { justifyContent: 'flex-start' },
+    msgRowRight: { justifyContent: 'flex-end' },
+    msgAvatar: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: `${colors.primary}30`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    msgAvatarText: { fontSize: 11, fontWeight: '600', color: colors.primary },
+    bubble: { maxWidth: '78%', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8 },
+    bubbleMine: { backgroundColor: colors.outgoing, borderBottomRightRadius: 4 },
+    bubbleTheirs: {
+      backgroundColor: colors.incoming,
+      borderBottomLeftRadius: 4,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    senderName: { fontSize: 11, fontWeight: '600', color: colors.primary, marginBottom: 3 },
+    msgText: { fontSize: 15, lineHeight: 21 },
+    msgTextMine: { color: colors.outgoingText },
+    msgTextTheirs: { color: colors.incomingText },
+    deletedText: { fontSize: 13, fontStyle: 'italic', color: colors.textMuted },
+    deletedTextMine: { color: `${colors.outgoingText}70` },
+    msgMeta: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 3,
+      marginTop: 3,
+    },
+    msgTime: { fontSize: 10 },
+    msgTimeMine: { color: `${colors.outgoingText}70` },
+    msgTimeTheirs: { color: colors.textMuted },
+    deliveryCheck: { fontSize: 11, fontWeight: '700' },
+    imgContainer: { maxWidth: 220 },
+    imgPlaceholder: {
+      width: 180,
+      height: 120,
+      borderRadius: 12,
+      backgroundColor: `${colors.primary}15`,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    attachImage: { width: 220, height: 160, borderRadius: 12 },
+    attachName: { fontSize: 11, marginTop: 3 },
+    fileCard: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: 220 },
+    fileIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 8,
+      backgroundColor: `${colors.primary}20`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    fileIconText: { fontSize: 18 },
+    fileMeta: { flex: 1 },
+    fileName: { fontSize: 13, fontWeight: '500' },
+    fileHint: { fontSize: 11, marginTop: 1 },
+    attachBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      backgroundColor: colors.card,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      gap: 8,
+    },
+    attachBarName: { flex: 1, fontSize: 13, color: colors.textSecondary },
+    attachBarRemove: { fontSize: 14, color: colors.textMuted, padding: 4 },
+    composer: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: colors.surface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      gap: 4,
+    },
+    attachBtn: {
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+      marginBottom: 2,
+    },
+    attachBtnIcon: { fontSize: 20 },
+    input: {
+      flex: 1,
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingTop: Platform.OS === 'ios' ? 10 : 8,
+      paddingBottom: Platform.OS === 'ios' ? 10 : 8,
+      color: colors.text,
+      fontSize: 15,
+      maxHeight: 120,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    sendBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+      marginBottom: 2,
+    },
+    sendBtnDisabled: { backgroundColor: colors.border },
+    sendBtnIcon: { color: '#fff', fontSize: 18, fontWeight: '700', lineHeight: 22 },
+    verifyOverlay: {
+      flex: 1,
+      backgroundColor: colors.overlay,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    verifyCard: {
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      padding: 24,
+      width: '100%',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    verifyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 6 },
+    verifySubtitle: { fontSize: 13, color: colors.textSecondary, marginBottom: 20, lineHeight: 18 },
+    verifySection: {
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    verifySectionLabel: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+      marginBottom: 6,
+    },
+    verifyFingerprint: {
+      fontSize: 13,
+      color: colors.text,
+      fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+      lineHeight: 20,
+    },
+    verifyClose: {
+      backgroundColor: colors.primary,
+      borderRadius: 12,
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginTop: 4,
+    },
+    verifyCloseText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  });
+}
+
+function DeliveryIcon({
+  delivered,
+  read,
+  colors,
+}: {
+  delivered: boolean;
+  read: boolean;
+  colors: ThemeColors;
+}) {
   const color = read
     ? '#60a5fa'
     : delivered
-      ? `${theme.colors.outgoingText}80`
-      : `${theme.colors.outgoingText}50`;
-  if (!delivered && !read) {
-    return <Text style={[styles.deliveryCheck, { color }]}>✓</Text>;
-  }
-  return <Text style={[styles.deliveryCheck, { color }]}>✓✓</Text>;
+      ? `${colors.outgoingText}80`
+      : `${colors.outgoingText}50`;
+  return (
+    <Text style={{ fontSize: 11, fontWeight: '700', color }}>
+      {delivered || read ? '✓✓' : '✓'}
+    </Text>
+  );
 }
 
-function TypingDots() {
+function TypingDots({ colors }: { colors: ThemeColors }) {
   const dot1 = useSharedValue(0);
   const dot2 = useSharedValue(0);
   const dot3 = useSharedValue(0);
 
   useEffect(() => {
-    const anim = (v: typeof dot1, delay: number) => {
-      v.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 300 }),
-          withTiming(0, { duration: 300 }),
-        ),
-        -1,
-        false,
-      );
-      setTimeout(() => {}, delay);
-    };
     dot1.value = withRepeat(
       withSequence(withTiming(1, { duration: 300 }), withTiming(0, { duration: 300 })),
       -1,
@@ -139,11 +341,18 @@ function TypingDots() {
   const s2 = useAnimatedStyle(() => ({ opacity: 0.3 + dot2.value * 0.7, transform: [{ translateY: -dot2.value * 3 }] }));
   const s3 = useAnimatedStyle(() => ({ opacity: 0.3 + dot3.value * 0.7, transform: [{ translateY: -dot3.value * 3 }] }));
 
+  const dotStyle = {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.primary,
+  };
+
   return (
-    <View style={styles.typingDots}>
-      <Animated.View style={[styles.typingDot, s1]} />
-      <Animated.View style={[styles.typingDot, s2]} />
-      <Animated.View style={[styles.typingDot, s3]} />
+    <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center' }}>
+      <Animated.View style={[dotStyle, s1]} />
+      <Animated.View style={[dotStyle, s2]} />
+      <Animated.View style={[dotStyle, s3]} />
     </View>
   );
 }
@@ -152,10 +361,14 @@ function AttachmentPreview({
   attachmentId,
   payload,
   isMine,
+  colors,
+  styles,
 }: {
   attachmentId: string;
   payload: string;
   isMine: boolean;
+  colors: ThemeColors;
+  styles: ReturnType<typeof makeStyles>;
 }) {
   const meta = parseAttachmentMeta(payload);
   const isImage = meta.type.startsWith('image/');
@@ -172,8 +385,7 @@ function AttachmentPreview({
         const bytes = new Uint8Array(res.data as ArrayBuffer);
         let binary = '';
         bytes.forEach((b) => (binary += String.fromCharCode(b)));
-        const b64 = btoa(binary);
-        setImageUri(`data:${meta.type};base64,${b64}`);
+        setImageUri(`data:${meta.type};base64,${btoa(binary)}`);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -182,9 +394,7 @@ function AttachmentPreview({
 
   async function handleDownload() {
     try {
-      const res = await apiClient.get(`/attachments/${attachmentId}/download`, {
-        responseType: 'arraybuffer',
-      });
+      await apiClient.get(`/attachments/${attachmentId}/download`, { responseType: 'arraybuffer' });
       Alert.alert('Скачано', `Файл "${meta.name}" загружен`);
     } catch {
       Alert.alert('Ошибка', 'Не удалось скачать файл');
@@ -197,16 +407,12 @@ function AttachmentPreview({
         <View style={styles.imgContainer}>
           {loading || !imageUri ? (
             <View style={styles.imgPlaceholder}>
-              <ActivityIndicator color={theme.colors.primary} />
+              <ActivityIndicator color={colors.primary} />
             </View>
           ) : (
-            <Image
-              source={{ uri: imageUri }}
-              style={styles.attachImage}
-              resizeMode="cover"
-            />
+            <Image source={{ uri: imageUri }} style={styles.attachImage} resizeMode="cover" />
           )}
-          <Text style={[styles.attachName, { color: isMine ? `${theme.colors.outgoingText}80` : theme.colors.textMuted }]}>
+          <Text style={[styles.attachName, { color: isMine ? `${colors.outgoingText}80` : colors.textMuted }]}>
             {meta.name}
           </Text>
         </View>
@@ -221,12 +427,12 @@ function AttachmentPreview({
       </View>
       <View style={styles.fileMeta}>
         <Text
-          style={[styles.fileName, { color: isMine ? theme.colors.outgoingText : theme.colors.text }]}
+          style={[styles.fileName, { color: isMine ? colors.outgoingText : colors.text }]}
           numberOfLines={1}
         >
           {meta.name}
         </Text>
-        <Text style={[styles.fileHint, { color: isMine ? `${theme.colors.outgoingText}70` : theme.colors.textMuted }]}>
+        <Text style={[styles.fileHint, { color: isMine ? `${colors.outgoingText}70` : colors.textMuted }]}>
           скачать
         </Text>
       </View>
@@ -243,15 +449,18 @@ interface PendingAttachment {
   uploading: boolean;
 }
 
-export function ChatScreen({ route }: Props) {
-  const { chatId, chatType } = route.params;
+export function ChatScreen({ route, navigation }: Props) {
+  const { chatId, chatType, otherUserId } = route.params;
   const isGroup = chatType === 'group';
-  const { userId, deviceId } = useAuthStore();
-  const { typingUsers, deliveryStatuses, clearUnread } = useChatStore();
+  const { userId } = useAuthStore();
+  const { typingUsers, deliveryStatuses, clearUnread, setActiveChatId } = useChatStore();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const queryClient = useQueryClient();
   const listRef = useRef<FlashList<ListItem>>(null);
   const [text, setText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
+  const [showVerify, setShowVerify] = useState(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const markedReadRef = useRef(new Set<string>());
@@ -259,7 +468,36 @@ export function ChatScreen({ route }: Props) {
   const sendScale = useSharedValue(1);
 
   useEffect(() => { activeChatIdRef.current = chatId; }, [chatId]);
-  useEffect(() => { clearUnread(chatId); return () => { markedReadRef.current.clear(); }; }, [chatId, clearUnread]);
+
+  useEffect(() => {
+    setActiveChatId(chatId);
+    return () => setActiveChatId(null);
+  }, [chatId, setActiveChatId]);
+
+  useEffect(() => {
+    clearUnread(chatId);
+    return () => { markedReadRef.current.clear(); };
+  }, [chatId, clearUnread]);
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <View style={{ flexDirection: 'row', gap: 8, marginRight: 4 }}>
+          {!!otherUserId && (
+            <TouchableOpacity onPress={() => setShowVerify(true)} hitSlop={8}>
+              <Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => Alert.alert('Звонки', 'Появятся в следующем обновлении')}
+            hitSlop={8}
+          >
+            <Ionicons name="call-outline" size={22} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      ),
+    });
+  }, [navigation, otherUserId, colors]);
 
   const { data: messages = [], isLoading } = useQuery<Message[]>({
     queryKey: ['messages', chatId],
@@ -267,6 +505,17 @@ export function ChatScreen({ route }: Props) {
       const res = await apiClient.get(`/chats/${chatId}/messages`, { params: { limit: 50 } });
       return (res.data as { items: Message[] }).items;
     },
+  });
+
+  const { data: me } = useQuery<User>({
+    queryKey: ['users', 'me'],
+    queryFn: async () => (await apiClient.get('/users/me')).data as User,
+  });
+
+  const { data: otherUser } = useQuery<User>({
+    queryKey: ['users', otherUserId],
+    queryFn: async () => (await apiClient.get(`/users/${otherUserId}`)).data as User,
+    enabled: !!otherUserId && showVerify,
   });
 
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
@@ -396,8 +645,7 @@ export function ChatScreen({ route }: Props) {
     });
     if (result.canceled || !result.assets[0]) return;
     const asset = result.assets[0];
-    const MAX = 100 * 1024 * 1024;
-    if ((asset.fileSize ?? 0) > MAX) {
+    if ((asset.fileSize ?? 0) > 100 * 1024 * 1024) {
       Alert.alert('Файл слишком большой', 'Максимум 100 МБ');
       return;
     }
@@ -405,14 +653,7 @@ export function ChatScreen({ route }: Props) {
     const fileName = asset.fileName ?? `image_${Date.now()}.jpg`;
     const mimeType = asset.mimeType ?? 'image/jpeg';
 
-    setPendingAttachment({
-      uri: asset.uri,
-      name: fileName,
-      type: mimeType,
-      size: asset.fileSize ?? 0,
-      serverId: null,
-      uploading: true,
-    });
+    setPendingAttachment({ uri: asset.uri, name: fileName, type: mimeType, size: asset.fileSize ?? 0, serverId: null, uploading: true });
 
     try {
       const form = new FormData();
@@ -420,9 +661,7 @@ export function ChatScreen({ route }: Props) {
       const res = await apiClient.post<{ id: string }>('/attachments/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setPendingAttachment((prev) =>
-        prev ? { ...prev, serverId: res.data.id, uploading: false } : null,
-      );
+      setPendingAttachment((prev) => prev ? { ...prev, serverId: res.data.id, uploading: false } : null);
     } catch {
       setPendingAttachment(null);
       Alert.alert('Ошибка', 'Не удалось загрузить файл');
@@ -469,12 +708,10 @@ export function ChatScreen({ route }: Props) {
     }
   }
 
-  const sendButtonStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: sendScale.value }],
-  }));
+  const sendButtonStyle = useAnimatedStyle(() => ({ transform: [{ scale: sendScale.value }] }));
 
   const renderItem = useCallback(
-    ({ item, index }: { item: ListItem; index: number }) => {
+    ({ item }: { item: ListItem }) => {
       if (item.kind === 'date') {
         return (
           <View style={styles.dateSepWrap}>
@@ -515,6 +752,8 @@ export function ChatScreen({ route }: Props) {
                 attachmentId={m.attachment_id}
                 payload={m.encrypted_payload}
                 isMine={isMine}
+                colors={colors}
+                styles={styles}
               />
             ) : (
               <Text style={[styles.msgText, isMine ? styles.msgTextMine : styles.msgTextTheirs]}>
@@ -526,17 +765,14 @@ export function ChatScreen({ route }: Props) {
                 {formatMsgTime(m.created_at)}
               </Text>
               {isMine && !isDeleted && (
-                <DeliveryIcon
-                  delivered={ds?.delivered ?? false}
-                  read={ds?.read ?? false}
-                />
+                <DeliveryIcon delivered={ds?.delivered ?? false} read={ds?.read ?? false} colors={colors} />
               )}
             </View>
           </View>
         </Animated.View>
       );
     },
-    [userId, deliveryStatuses, isGroup],
+    [userId, deliveryStatuses, isGroup, styles, colors],
   );
 
   const keyExtractor = useCallback(
@@ -557,14 +793,14 @@ export function ChatScreen({ route }: Props) {
     >
       {typingLabel && (
         <View style={styles.typingBar}>
-          <TypingDots />
+          <TypingDots colors={colors} />
           <Text style={styles.typingLabel}>{typingLabel}</Text>
         </View>
       )}
 
       {isLoading ? (
         <View style={styles.loadingCenter}>
-          <ActivityIndicator color={theme.colors.primary} size="large" />
+          <ActivityIndicator color={colors.primary} size="large" />
         </View>
       ) : (
         <FlashList
@@ -607,7 +843,7 @@ export function ChatScreen({ route }: Props) {
           value={text}
           onChangeText={handleTyping}
           placeholder="Сообщение..."
-          placeholderTextColor={theme.colors.textMuted}
+          placeholderTextColor={colors.textMuted}
           multiline
           maxLength={4000}
           returnKeyType="default"
@@ -624,201 +860,47 @@ export function ChatScreen({ route }: Props) {
           </TouchableOpacity>
         </Animated.View>
       </View>
+
+      <Modal
+        visible={showVerify}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowVerify(false)}
+      >
+        <TouchableOpacity
+          style={styles.verifyOverlay}
+          activeOpacity={1}
+          onPress={() => setShowVerify(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.verifyCard}>
+            <Text style={styles.verifyTitle}>Проверка шифрования</Text>
+            <Text style={styles.verifySubtitle}>
+              Сравните отпечатки ключей с собеседником для подтверждения безопасности
+            </Text>
+
+            <View style={styles.verifySection}>
+              <Text style={styles.verifySectionLabel}>Ваш ключ</Text>
+              <Text style={styles.verifyFingerprint} selectable>
+                {me?.public_key_fingerprint ?? '—'}
+              </Text>
+            </View>
+
+            <View style={styles.verifySection}>
+              <Text style={styles.verifySectionLabel}>Ключ собеседника</Text>
+              <Text style={styles.verifyFingerprint} selectable>
+                {otherUser?.public_key_fingerprint ?? (otherUserId ? '...' : '—')}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.verifyClose}
+              onPress={() => setShowVerify(false)}
+            >
+              <Text style={styles.verifyCloseText}>Закрыть</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  loadingCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  listContent: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm },
-  typingBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 6,
-    backgroundColor: theme.colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  typingDots: { flexDirection: 'row', gap: 3, alignItems: 'center' },
-  typingDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: theme.colors.primary,
-  },
-  typingLabel: { fontSize: 12, color: theme.colors.primary },
-  emptyChat: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
-  emptyChatText: { fontSize: theme.font.md, color: theme.colors.textSecondary, fontWeight: '500' },
-  emptyChatHint: { fontSize: theme.font.sm, color: theme.colors.textMuted, marginTop: 4 },
-  dateSepWrap: { alignItems: 'center', marginVertical: theme.spacing.md },
-  dateSep: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.radius.full,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  dateSepText: { fontSize: 11, color: theme.colors.textMuted },
-  msgRow: {
-    flexDirection: 'row',
-    marginVertical: 2,
-    alignItems: 'flex-end',
-    gap: theme.spacing.xs,
-  },
-  msgRowLeft: { justifyContent: 'flex-start' },
-  msgRowRight: { justifyContent: 'flex-end' },
-  msgAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: `${theme.colors.primary}30`,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  msgAvatarText: { fontSize: 11, fontWeight: '600', color: theme.colors.primary },
-  bubble: {
-    maxWidth: '78%',
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  bubbleMine: {
-    backgroundColor: theme.colors.outgoing,
-    borderBottomRightRadius: 4,
-  },
-  bubbleTheirs: {
-    backgroundColor: theme.colors.incoming,
-    borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  senderName: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: theme.colors.primary,
-    marginBottom: 3,
-  },
-  msgText: { fontSize: theme.font.md, lineHeight: 21 },
-  msgTextMine: { color: theme.colors.outgoingText },
-  msgTextTheirs: { color: theme.colors.incomingText },
-  deletedText: {
-    fontSize: theme.font.sm,
-    fontStyle: 'italic',
-    color: theme.colors.textMuted,
-  },
-  deletedTextMine: { color: `${theme.colors.outgoingText}70` },
-  msgMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 3,
-    marginTop: 3,
-  },
-  msgTime: { fontSize: 10 },
-  msgTimeMine: { color: `${theme.colors.outgoingText}70` },
-  msgTimeTheirs: { color: theme.colors.textMuted },
-  deliveryCheck: { fontSize: 11, fontWeight: '700' },
-  imgContainer: { maxWidth: 220 },
-  imgPlaceholder: {
-    width: 180,
-    height: 120,
-    borderRadius: theme.radius.md,
-    backgroundColor: `${theme.colors.primary}15`,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  attachImage: {
-    width: 220,
-    height: 160,
-    borderRadius: theme.radius.md,
-  },
-  attachName: { fontSize: 11, marginTop: 3 },
-  fileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    maxWidth: 220,
-  },
-  fileIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: theme.radius.sm,
-    backgroundColor: `${theme.colors.primary}20`,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  fileIconText: { fontSize: 18 },
-  fileMeta: { flex: 1 },
-  fileName: { fontSize: theme.font.sm, fontWeight: '500' },
-  fileHint: { fontSize: 11, marginTop: 1 },
-  attachBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 8,
-    backgroundColor: theme.colors.card,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    gap: theme.spacing.sm,
-  },
-  attachBarName: {
-    flex: 1,
-    fontSize: theme.font.sm,
-    color: theme.colors.textSecondary,
-  },
-  attachBarRemove: {
-    fontSize: 14,
-    color: theme.colors.textMuted,
-    padding: 4,
-  },
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    backgroundColor: theme.colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    gap: theme.spacing.xs,
-  },
-  attachBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    marginBottom: 2,
-  },
-  attachBtnIcon: { fontSize: 20 },
-  input: {
-    flex: 1,
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: Platform.OS === 'ios' ? 10 : 8,
-    paddingBottom: Platform.OS === 'ios' ? 10 : 8,
-    color: theme.colors.text,
-    fontSize: theme.font.md,
-    maxHeight: 120,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  sendBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: theme.colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    marginBottom: 2,
-  },
-  sendBtnDisabled: { backgroundColor: theme.colors.border },
-  sendBtnIcon: { color: '#fff', fontSize: 18, fontWeight: '700', lineHeight: 22 },
-});

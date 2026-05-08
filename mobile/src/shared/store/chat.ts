@@ -17,6 +17,7 @@ interface ChatStore {
   unreadCounts: Record<string, number>;
   lastMessages: Record<string, LastMessage>;
   deliveryStatuses: Record<string, DeliveryStatus>;
+  activeChatId: string | null;
 
   setTyping: (chatId: string, userId: string, isTyping: boolean) => void;
   setOnline: (userId: string, status: 'online' | 'offline') => void;
@@ -25,6 +26,7 @@ interface ChatStore {
   setLastMessage: (chatId: string, msg: LastMessage) => void;
   setDelivered: (messageId: string) => void;
   setRead: (messageId: string) => void;
+  setActiveChatId: (id: string | null) => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -33,14 +35,13 @@ export const useChatStore = create<ChatStore>((set) => ({
   unreadCounts: {},
   lastMessages: {},
   deliveryStatuses: {},
+  activeChatId: null,
 
   setTyping: (chatId, userId, isTyping) =>
     set((s) => {
       const current = s.typingUsers[chatId] ?? [];
       const updated = isTyping
-        ? current.includes(userId)
-          ? current
-          : [...current, userId]
+        ? current.includes(userId) ? current : [...current, userId]
         : current.filter((u) => u !== userId);
       return { typingUsers: { ...s.typingUsers, [chatId]: updated } };
     }),
@@ -74,4 +75,6 @@ export const useChatStore = create<ChatStore>((set) => ({
         [messageId]: { delivered: true, read: true },
       },
     })),
+
+  setActiveChatId: (id) => set({ activeChatId: id }),
 }));
