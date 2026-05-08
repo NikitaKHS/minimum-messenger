@@ -406,6 +406,9 @@ function ChatWindow({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { typingUsers, deliveryStatuses } = useChatStore();
 
+  const chatId = chat.id;
+  const isGroup = chat.type === "group";
+
   useEffect(() => {
     if (isGroup || !chat.other_user_id) { setSharedKey(null); return; }
     let cancelled = false;
@@ -425,9 +428,6 @@ function ChatWindow({
     void derive();
     return () => { cancelled = true; };
   }, [chat.id, chat.other_user_id, isGroup]);
-
-  const chatId = chat.id;
-  const isGroup = chat.type === "group";
   const chatTitle = chatDisplayName(chat);
   const typing = typingUsers[chatId] ?? [];
 
